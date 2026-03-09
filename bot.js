@@ -26,7 +26,9 @@ const TOKEN              = process.env.TOKEN              || 'YOUR_BOT_TOKEN';
 const TRADE_CHANNEL_ID   = process.env.TRADE_CHANNEL_ID   || '1480361973538361344';
 const REQUEST_CHANNEL_ID = process.env.REQUEST_CHANNEL_ID || '1480361973538361344';
 const MM_ROLE_ID         = process.env.MM_ROLE_ID         || '1451449214906273953';
-const MM_CATEGORY_ID     = process.env.MM_CATEGORY_ID     || '1477883142604853522';
+const MM_CATEGORY_ID           = process.env.MM_CATEGORY_ID           || '1477883142604853522';
+const IMAGE_STORAGE_CHANNEL_ID = process.env.IMAGE_STORAGE_CHANNEL_ID || '1480489127643447338'; // قناة مخفية لتخزين الصور
+
 // ══════════════════════════════════════════════════════
 //  💾  التخزين في الذاكرة
 // ══════════════════════════════════════════════════════
@@ -490,8 +492,7 @@ async function handleSellerImageUpload(message, p) {
   if (!trade) { pendingImageUploads.delete(message.author.id); return; }
   const img = await extractImage(message);
   if (img === false) return;
-  // ── حذف رسالة الصورة من الشات فوراً ──
-  try { await message.delete(); } catch {}
+  
   trade.imageUrl = img;
   activeTrades.set(p.tradeId, trade);
   pendingImageUploads.delete(message.author.id);
@@ -504,8 +505,7 @@ async function handleRequestImageUpload(message, p) {
   if (!req) { pendingImageUploads.delete(message.author.id); return; }
   const img = await extractImage(message);
   if (img === false) return;
-  // ── حذف رسالة الصورة من الشات فوراً ──
-  try { await message.delete(); } catch {}
+  
   req.imageUrl = img;
   activeRequests.set(p.requestId, req);
   pendingImageUploads.delete(message.author.id);
@@ -522,8 +522,7 @@ async function handleOfferImageUpload(message, p) {
   const img = await extractImage(message);
   if (img === false) return;
 
-  // ── حذف رسالة الصورة من الشات فوراً ──
-  try { await message.delete(); } catch {}
+  
 
   offer.imageUrl = img;
   post.offers.set(p.offerId, offer);
@@ -1208,10 +1207,23 @@ async function extractImage(message) {
   if (message.attachments.size > 0) {
     const att = message.attachments.first();
     if (att.contentType?.startsWith('image/')) {
-      // ✅ احفظ الرابط أولاً قبل الحذف
-      const imageUrl = att.url;
-      try { await message.delete(); } catch {}
-      return imageUrl;
+      // ✅ ارسل الصورة للقناة المخفية واحذفها من الشات
+      if (IMAGE_STORAGE_CHANNEL_ID) {
+        try {
+          const storageChannel = client.channels.cache.get(IMAGE_STORAGE_CHANNEL_ID);
+          if (storageChannel) {
+            const stored = await storageChannel.send({
+              files: [{ attachment: att.url, name: att.name }]
+            });
+            // احذف الرسالة الأصلية من الشات
+            try { await message.delete(); } catch {}
+            // ارجع رابط الصورة من القناة المخفية
+            return stored.attachments.first()?.url || att.url;
+          }
+        } catch {}
+      }
+      // لو ما في قناة مخفية، ابقي الصورة في الشات
+      return att.url;
     }
     // ملف غلط
     try { await message.delete(); } catch {}
