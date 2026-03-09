@@ -104,7 +104,7 @@ async function sendMainMenu(message) {
     .setFooter({ text: 'Steal a Brainrot Trading Bot', iconURL: client.user.displayAvatarURL() })
     .setTimestamp();
 
-  await message.reply({
+  await message.channel.send({
     embeds: [embed],
     components: [new ActionRowBuilder().addComponents(
       mkBtn(`create_trade_${message.author.id}`,   '🔄 إنشاء تريد', ButtonStyle.Primary),
@@ -118,7 +118,7 @@ async function sendMainMenu(message) {
 //  🛒  نموذج الطلب (أمر !طلب المباشر)
 // ══════════════════════════════════════════════════════
 async function sendRequestForm(message) {
-  await message.reply({
+  await message.channel.send({
     embeds: [new EmbedBuilder()
       .setColor('#00B4D8')
       .setTitle('🛒 طلب شي — Steal a Brainrot')
@@ -615,23 +615,36 @@ async function publishTrade(message, trade, tradeId) {
     )]
   });
 
-  // ── إشعار البائع عبر DM فقط (ما يشوفه أحد في الشات) ──
+  // ── إشعار البائع عبر DM ──
+  const confirmEmbed = new EmbedBuilder().setColor('#00FF7F').setTitle('✅ تم نشر تريدك!')
+    .setDescription(
+      `نُشر تريدك في <#${TRADE_CHANNEL_ID}> بنجاح! 🎉\n` +
+      `الناس يقدرون يحطون عروض وأنت تختار الأنسب.\n` +
+      `ستوصلك رسالة خاصة مع كل عرض جديد.`
+    )
+    .addFields(
+      { name: '🎁 عرضك',  value: trade.offerItem,                            inline: true },
+      { name: '💰 مقابل', value: trade.wantItem,                              inline: true },
+      { name: '🖼️ صورة', value: trade.imageUrl ? '✅ مرفقة' : '❌ بدون صورة', inline: true }
+    ).setTimestamp();
+
+  let dmSent = false;
   try {
     const owner = await client.users.fetch(trade.userId);
-    await owner.send({ embeds: [
-      new EmbedBuilder().setColor('#00FF7F').setTitle('✅ تم نشر تريدك!')
-        .setDescription(
-          `نُشر تريدك في قناة التريدات بنجاح! 🎉\n` +
-          `الناس يقدرون يحطون عروض وأنت تختار الأنسب.\n` +
-          `ستوصلك رسالة خاصة مع كل عرض جديد.`
-        )
-        .addFields(
-          { name: '🎁 عرضك',  value: trade.offerItem,                            inline: true },
-          { name: '💰 مقابل', value: trade.wantItem,                              inline: true },
-          { name: '🖼️ صورة', value: trade.imageUrl ? '✅ مرفقة' : '❌ بدون صورة', inline: true }
-        ).setTimestamp()
-    ]});
+    await owner.send({ embeds: [confirmEmbed] });
+    dmSent = true;
   } catch {}
+
+  // إذا ما وصل الـ DM، أرسل في القناة وتحذف بعد 8 ثواني
+  if (!dmSent) {
+    try {
+      const fallback = await message.channel.send({
+        content: `<@${trade.userId}>`,
+        embeds: [confirmEmbed]
+      });
+      setTimeout(() => fallback.delete().catch(() => {}), 8000);
+    } catch {}
+  }
 }
 
 // ══════════════════════════════════════════════════════
@@ -671,23 +684,35 @@ async function publishRequest(message, req, requestId) {
     )]
   });
 
-  // ── إشعار صاحب الطلب عبر DM فقط (ما يشوفه أحد في الشات) ──
+  // ── إشعار صاحب الطلب عبر DM مع fallback ──
+  const reqConfirmEmbed = new EmbedBuilder().setColor('#00B4D8').setTitle('✅ تم نشر طلبك!')
+    .setDescription(
+      `نُشر طلبك في <#${REQUEST_CHANNEL_ID}> بنجاح! 🎉\n` +
+      `الناس يقدرون يعرضون ما عندهم وأنت تختار الأنسب.\n` +
+      `ستوصلك رسالة خاصة مع كل عرض جديد.`
+    )
+    .addFields(
+      { name: '🎯 طلبك',   value: req.wantItem,                               inline: true },
+      { name: '🎁 مقابله', value: req.offerItem,                               inline: true },
+      { name: '🖼️ صورة',  value: req.imageUrl ? '✅ مرفقة' : '❌ بدون صورة', inline: true }
+    ).setTimestamp();
+
+  let reqDmSent = false;
   try {
     const owner = await client.users.fetch(req.userId);
-    await owner.send({ embeds: [
-      new EmbedBuilder().setColor('#00B4D8').setTitle('✅ تم نشر طلبك!')
-        .setDescription(
-          `نُشر طلبك في قناة الطلبات بنجاح! 🎉\n` +
-          `الناس يقدرون يعرضون ما عندهم وأنت تختار الأنسب.\n` +
-          `ستوصلك رسالة خاصة مع كل عرض جديد.`
-        )
-        .addFields(
-          { name: '🎯 طلبك',   value: req.wantItem,                               inline: true },
-          { name: '🎁 مقابله', value: req.offerItem,                               inline: true },
-          { name: '🖼️ صورة',  value: req.imageUrl ? '✅ مرفقة' : '❌ بدون صورة', inline: true }
-        ).setTimestamp()
-    ]});
+    await owner.send({ embeds: [reqConfirmEmbed] });
+    reqDmSent = true;
   } catch {}
+
+  if (!reqDmSent) {
+    try {
+      const fallback = await message.channel.send({
+        content: `<@${req.userId}>`,
+        embeds: [reqConfirmEmbed]
+      });
+      setTimeout(() => fallback.delete().catch(() => {}), 8000);
+    } catch {}
+  }
 }
 
 // ══════════════════════════════════════════════════════
@@ -946,7 +971,7 @@ async function cancelTradeTicket(interaction, td) {
 //  📋  عرض التريدات والطلبات
 // ══════════════════════════════════════════════════════
 async function handleViewTrades(message) {
-  if (!activeTrades.size) return message.reply({ embeds: [
+  if (!activeTrades.size) return message.channel.send({ embeds: [
     new EmbedBuilder().setColor('#FFA500')
       .setTitle('📋 التريدات النشطة')
       .setDescription('❌ ما في تريدات حالياً!\nاستخدم `!تريد` لإنشاء تريد جديد.')
@@ -968,11 +993,11 @@ async function handleViewTrades(message) {
       inline: false
     });
   }
-  await message.reply({ embeds: [embed] });
+  await message.channel.send({ embeds: [embed] });
 }
 
 async function handleViewRequests(message) {
-  if (!activeRequests.size) return message.reply({ embeds: [
+  if (!activeRequests.size) return message.channel.send({ embeds: [
     new EmbedBuilder().setColor('#FFA500')
       .setTitle('🛒 الطلبات النشطة')
       .setDescription('❌ ما في طلبات حالياً!\nاستخدم `!طلب` لإنشاء طلب جديد.')
@@ -994,7 +1019,7 @@ async function handleViewRequests(message) {
       inline: false
     });
   }
-  await message.reply({ embeds: [embed] });
+  await message.channel.send({ embeds: [embed] });
 }
 
 async function handleViewTradesInteraction(interaction) {
@@ -1051,7 +1076,7 @@ async function showAllInteraction(interaction) {
 //  ❓  المساعدة
 // ══════════════════════════════════════════════════════
 async function handleHelp(message) {
-  await message.reply({ embeds: [
+  await message.channel.send({ embeds: [
     new EmbedBuilder().setColor('#5865F2')
       .setTitle('📖 مساعدة البوت — Steal a Brainrot Trading v4')
       .addFields(
@@ -1201,7 +1226,4 @@ async function extractImage(message) {
 }
 
 // ══════════════════════════════════════════════════════
-
 client.login(TOKEN);
-
-
