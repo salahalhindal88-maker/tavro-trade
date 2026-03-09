@@ -160,6 +160,76 @@ client.on(Events.InteractionCreate, async (interaction) => {
     if (id === 'view_requests') return handleViewRequestsInteraction(interaction);
     if (id === 'view_trades')   return handleViewTradesInteraction(interaction);
 
+    // ── تريداتي (تريدات المستخدم فقط) ───────────
+    if (id === 'my_trades') return showMyTrades(interaction);
+
+    // ── طلباتي (طلبات المستخدم فقط) ─────────────
+    if (id === 'my_requests') return showMyRequests(interaction);
+
+    // ── إعادة نشر تريد ───────────────────────────
+    if (id.startsWith('repost_trade_')) {
+      const tradeId = id.replace('repost_trade_', '');
+      const trade   = activeTrades.get(tradeId);
+      if (!trade)
+        return interaction.reply({ content: '❌ التريد غير موجود!', ephemeral: true });
+      if (interaction.user.id !== trade.userId)
+        return interaction.reply({ content: '❌ هذا مو تريدك!', ephemeral: true });
+      if (trade.locked)
+        return interaction.reply({ content: '❌ التريد مغلق ولا يمكن إعادة نشره!', ephemeral: true });
+      await interaction.reply({ content: '🔄 جاري إعادة النشر...', ephemeral: true });
+      trade.offers = new Map(); // إعادة تعيين العروض
+      activeTrades.set(tradeId, trade);
+      await repostTrade(interaction, trade, tradeId);
+      return;
+    }
+
+    // ── إعادة نشر طلب ────────────────────────────
+    if (id.startsWith('repost_request_')) {
+      const requestId = id.replace('repost_request_', '');
+      const req       = activeRequests.get(requestId);
+      if (!req)
+        return interaction.reply({ content: '❌ الطلب غير موجود!', ephemeral: true });
+      if (interaction.user.id !== req.userId)
+        return interaction.reply({ content: '❌ هذا مو طلبك!', ephemeral: true });
+      if (req.locked)
+        return interaction.reply({ content: '❌ الطلب مغلق ولا يمكن إعادة نشره!', ephemeral: true });
+      await interaction.reply({ content: '🔄 جاري إعادة النشر...', ephemeral: true });
+      req.offers = new Map();
+      activeRequests.set(requestId, req);
+      await repostRequest(interaction, req, requestId);
+      return;
+    }
+
+    // ── إعادة نشر من قائمة تريداتي ───────────────
+    if (id.startsWith('myrepost_trade_')) {
+      const tradeId = id.replace('myrepost_trade_', '');
+      const trade   = activeTrades.get(tradeId);
+      if (!trade || interaction.user.id !== trade.userId)
+        return interaction.reply({ content: '❌ غير مصرح!', ephemeral: true });
+      if (trade.locked)
+        return interaction.reply({ content: '❌ التريد مغلق!', ephemeral: true });
+      await interaction.reply({ content: '🔄 جاري إعادة النشر...', ephemeral: true });
+      trade.offers = new Map();
+      activeTrades.set(tradeId, trade);
+      await repostTrade(interaction, trade, tradeId);
+      return;
+    }
+
+    // ── إعادة نشر من قائمة طلباتي ────────────────
+    if (id.startsWith('myrepost_request_')) {
+      const requestId = id.replace('myrepost_request_', '');
+      const req       = activeRequests.get(requestId);
+      if (!req || interaction.user.id !== req.userId)
+        return interaction.reply({ content: '❌ غير مصرح!', ephemeral: true });
+      if (req.locked)
+        return interaction.reply({ content: '❌ الطلب مغلق!', ephemeral: true });
+      await interaction.reply({ content: '🔄 جاري إعادة النشر...', ephemeral: true });
+      req.offers = new Map();
+      activeRequests.set(requestId, req);
+      await repostRequest(interaction, req, requestId);
+      return;
+    }
+
     // ── تقديم عرض على تريد ───────────────────────
     if (id.startsWith('make_offer_')) {
       const tradeId = id.replace('make_offer_', '');
@@ -606,11 +676,17 @@ async function publishTrade(message, trade, tradeId) {
   const ch = client.channels.cache.get(TRADE_CHANNEL_ID);
   if (ch) await ch.send({
     embeds: [embed],
-    components: [new ActionRowBuilder().addComponents(
-      mkBtn(`make_offer_${tradeId}`,        '💬 تقديم عرض', ButtonStyle.Primary),
-      mkBtn(`view_offers_trade_${tradeId}`, '👁️ عروضي',     ButtonStyle.Secondary),
-      mkBtn(`delete_trade_${tradeId}`,      '🗑️ حذف',       ButtonStyle.Danger)
-    )]
+    components: [
+      new ActionRowBuilder().addComponents(
+        mkBtn(`make_offer_${tradeId}`,        '💬 تقديم عرض', ButtonStyle.Primary),
+        mkBtn(`view_offers_trade_${tradeId}`, '👁️ عروضي',     ButtonStyle.Secondary),
+        mkBtn(`delete_trade_${tradeId}`,      '🗑️ حذف',       ButtonStyle.Danger)
+      ),
+      new ActionRowBuilder().addComponents(
+        mkBtn(`repost_trade_${tradeId}`,      '🔄 إعادة نشر', ButtonStyle.Success),
+        mkBtn('my_trades',                    '📋 تريداتي',    ButtonStyle.Secondary)
+      )
+    ]
   });
 
   // ── إشعار البائع عبر DM ──
@@ -675,11 +751,17 @@ async function publishRequest(message, req, requestId) {
   const ch = client.channels.cache.get(REQUEST_CHANNEL_ID);
   if (ch) await ch.send({
     embeds: [embed],
-    components: [new ActionRowBuilder().addComponents(
-      mkBtn(`fulfill_request_${requestId}`,        '💬 تقديم عرض', ButtonStyle.Success),
-      mkBtn(`view_offers_request_${requestId}`,    '👁️ عروضي',     ButtonStyle.Secondary),
-      mkBtn(`delete_request_${requestId}`,         '🗑️ حذف',       ButtonStyle.Danger)
-    )]
+    components: [
+      new ActionRowBuilder().addComponents(
+        mkBtn(`fulfill_request_${requestId}`,     '💬 تقديم عرض', ButtonStyle.Success),
+        mkBtn(`view_offers_request_${requestId}`, '👁️ عروضي',     ButtonStyle.Secondary),
+        mkBtn(`delete_request_${requestId}`,      '🗑️ حذف',       ButtonStyle.Danger)
+      ),
+      new ActionRowBuilder().addComponents(
+        mkBtn(`repost_request_${requestId}`,      '🔄 إعادة نشر', ButtonStyle.Success),
+        mkBtn('my_requests',                      '📋 طلباتي',     ButtonStyle.Secondary)
+      )
+    ]
   });
 
   // ── إشعار صاحب الطلب عبر DM مع fallback ──
@@ -963,6 +1045,201 @@ async function cancelTradeTicket(interaction, td) {
     if (isTrade) activeTrades.delete(td.postId);
     else activeRequests.delete(td.postId);
   }, 10000);
+}
+
+
+// ══════════════════════════════════════════════════════
+//  🔄  إعادة نشر تريد
+// ══════════════════════════════════════════════════════
+async function repostTrade(source, trade, tradeId) {
+  const embed = new EmbedBuilder()
+    .setColor('#FF6B35')
+    .setAuthor({ name: `${trade.username} يعرض تريد!`, iconURL: trade.userAvatar })
+    .setTitle('🔄 عرض تريد جديد — Steal a Brainrot')
+    .addFields(
+      { name: '╔══════════════════════╗', value: '_ _',             inline: false },
+      { name: '🎁 __الشي المعروض__',    value: `> \`\`\`${trade.offerItem}\`\`\``, inline: false },
+      { name: '⬆️ __التطويرات__',       value: `> 🔧 ${trade.upgrades}`,           inline: true  },
+      { name: '💵 __الدخل/ثانية__',    value: `> 💰 ${trade.income}`,             inline: true  },
+      { name: '_ _', value: '━━━━━━━━━━━━━━━━━━━━━━━━', inline: false },
+      { name: '💰 __يبي مقابله__',      value: `> \`\`\`${trade.wantItem}\`\`\``, inline: false },
+      { name: '_ _', value: '━━━━━━━━━━━━━━━━━━━━━━━━', inline: false },
+      { name: '📝 __ملاحظات__',         value: `> ${trade.notes}`,                inline: false },
+      { name: '╚══════════════════════╝', value: '_ _',             inline: false },
+      { name: '👤 __صاحب التريد__', value: `<@${trade.userId}>`,      inline: true },
+      { name: '🆔 __Trade ID__',    value: `\`${tradeId.slice(-6)}\``, inline: true },
+      { name: '📊 __الحالة__',      value: '🟢 يقبل عروض',            inline: true }
+    )
+    .setFooter({ text: '💬 عندك شي غير اللي يبيه؟ اضغط "تقديم عرض"!', iconURL: client.user.displayAvatarURL() })
+    .setTimestamp();
+
+  if (trade.imageUrl) embed.setImage(trade.imageUrl);
+
+  const ch = client.channels.cache.get(TRADE_CHANNEL_ID);
+  if (ch) await ch.send({
+    embeds: [embed],
+    components: [
+      new ActionRowBuilder().addComponents(
+        mkBtn(`make_offer_${tradeId}`,        '💬 تقديم عرض', ButtonStyle.Primary),
+        mkBtn(`view_offers_trade_${tradeId}`, '👁️ عروضي',     ButtonStyle.Secondary),
+        mkBtn(`delete_trade_${tradeId}`,      '🗑️ حذف',       ButtonStyle.Danger)
+      ),
+      new ActionRowBuilder().addComponents(
+        mkBtn(`repost_trade_${tradeId}`,      '🔄 إعادة نشر', ButtonStyle.Success),
+        mkBtn('my_trades',                    '📋 تريداتي',    ButtonStyle.Secondary)
+      )
+    ]
+  });
+}
+
+// ══════════════════════════════════════════════════════
+//  🔄  إعادة نشر طلب
+// ══════════════════════════════════════════════════════
+async function repostRequest(source, req, requestId) {
+  const embed = new EmbedBuilder()
+    .setColor('#00B4D8')
+    .setAuthor({ name: `${req.username} يطلب شي!`, iconURL: req.userAvatar })
+    .setTitle('🛒 طلب شي — Steal a Brainrot')
+    .addFields(
+      { name: '╔══════════════════════╗', value: '_ _',              inline: false },
+      { name: '🎯 __الشي المطلوب__',    value: `> \`\`\`${req.wantItem}\`\`\``,  inline: false },
+      { name: '📋 __تفاصيل الطلب__',   value: `> ${req.wantDetails}`,             inline: false },
+      { name: '_ _', value: '━━━━━━━━━━━━━━━━━━━━━━━━', inline: false },
+      { name: '🎁 __عنده مقابله__',    value: `> \`\`\`${req.offerItem}\`\`\``,  inline: false },
+      { name: '💵 __دخله/ثانية__',     value: `> 💰 ${req.offerIncome}`,          inline: true  },
+      { name: '_ _', value: '━━━━━━━━━━━━━━━━━━━━━━━━', inline: false },
+      { name: '📝 __ملاحظات__',         value: `> ${req.notes}`,                  inline: false },
+      { name: '╚══════════════════════╝', value: '_ _',              inline: false },
+      { name: '👤 __صاحب الطلب__',  value: `<@${req.userId}>`,          inline: true },
+      { name: '🆔 __Request ID__',   value: `\`${requestId.slice(-6)}\``, inline: true },
+      { name: '📊 __الحالة__',       value: '🟢 يقبل عروض',              inline: true }
+    )
+    .setFooter({ text: '🙋 عندك الشي؟ اضغط "تقديم عرض"!', iconURL: client.user.displayAvatarURL() })
+    .setTimestamp();
+
+  if (req.imageUrl) embed.setImage(req.imageUrl);
+
+  const ch = client.channels.cache.get(REQUEST_CHANNEL_ID);
+  if (ch) await ch.send({
+    embeds: [embed],
+    components: [
+      new ActionRowBuilder().addComponents(
+        mkBtn(`fulfill_request_${requestId}`,     '💬 تقديم عرض', ButtonStyle.Success),
+        mkBtn(`view_offers_request_${requestId}`, '👁️ عروضي',     ButtonStyle.Secondary),
+        mkBtn(`delete_request_${requestId}`,      '🗑️ حذف',       ButtonStyle.Danger)
+      ),
+      new ActionRowBuilder().addComponents(
+        mkBtn(`repost_request_${requestId}`,      '🔄 إعادة نشر', ButtonStyle.Success),
+        mkBtn('my_requests',                      '📋 طلباتي',     ButtonStyle.Secondary)
+      )
+    ]
+  });
+}
+
+// ══════════════════════════════════════════════════════
+//  📋  تريداتي — تريدات المستخدم فقط
+// ══════════════════════════════════════════════════════
+async function showMyTrades(interaction) {
+  const userId   = interaction.user.id;
+  const myTrades = [...activeTrades.entries()].filter(([, t]) => t.userId === userId && !t.locked);
+
+  if (myTrades.length === 0) {
+    return interaction.reply({ embeds: [
+      new EmbedBuilder().setColor('#FFA500')
+        .setTitle('📋 تريداتي')
+        .setDescription('ما عندك تريدات نشطة حالياً.\nاستخدم `!تريد` لإنشاء تريد جديد.')
+        .setTimestamp()
+    ], ephemeral: true });
+  }
+
+  const embeds = [];
+  const rows   = [];
+  let i = 0;
+
+  for (const [tradeId, trade] of myTrades) {
+    if (i >= 5) break;
+
+    const e = new EmbedBuilder()
+      .setColor('#FF6B35')
+      .setTitle(`${i + 1}. ${trade.offerItem}`)
+      .addFields(
+        { name: '💰 يبي',         value: trade.wantItem,   inline: true },
+        { name: '💵 دخله/ثانية', value: trade.income,     inline: true },
+        { name: '💬 العروض',      value: `${trade.offers.size} عرض`, inline: true }
+      )
+      .setTimestamp(trade.timestamp);
+
+    if (trade.imageUrl) e.setThumbnail(trade.imageUrl);
+    embeds.push(e);
+
+    rows.push(new ActionRowBuilder().addComponents(
+      mkBtn(`myrepost_trade_${tradeId}`, `🔄 إعادة نشر ${i + 1}`, ButtonStyle.Success),
+      mkBtn(`view_offers_trade_${tradeId}`, `👁️ عروض ${i + 1}`, ButtonStyle.Secondary),
+      mkBtn(`delete_trade_${tradeId}`, `🗑️ حذف ${i + 1}`, ButtonStyle.Danger)
+    ));
+    i++;
+  }
+
+  const header = new EmbedBuilder()
+    .setColor('#FF6B35')
+    .setTitle(`📋 تريداتي — ${myTrades.length} تريد نشط`)
+    .setDescription('هذي تريداتك اللي لم تُغلق بعد.\nتقدر تعيد نشرها أو تشوف عروضها أو تحذفها.')
+    .setTimestamp();
+
+  await interaction.reply({ embeds: [header, ...embeds], components: rows, ephemeral: true });
+}
+
+// ══════════════════════════════════════════════════════
+//  📋  طلباتي — طلبات المستخدم فقط
+// ══════════════════════════════════════════════════════
+async function showMyRequests(interaction) {
+  const userId      = interaction.user.id;
+  const myRequests  = [...activeRequests.entries()].filter(([, r]) => r.userId === userId && !r.locked);
+
+  if (myRequests.length === 0) {
+    return interaction.reply({ embeds: [
+      new EmbedBuilder().setColor('#FFA500')
+        .setTitle('📋 طلباتي')
+        .setDescription('ما عندك طلبات نشطة حالياً.\nاستخدم `!طلب` لإنشاء طلب جديد.')
+        .setTimestamp()
+    ], ephemeral: true });
+  }
+
+  const embeds = [];
+  const rows   = [];
+  let i = 0;
+
+  for (const [requestId, req] of myRequests) {
+    if (i >= 5) break;
+
+    const e = new EmbedBuilder()
+      .setColor('#00B4D8')
+      .setTitle(`${i + 1}. يطلب: ${req.wantItem}`)
+      .addFields(
+        { name: '🎁 مقابله',      value: req.offerItem,    inline: true },
+        { name: '💵 دخله/ثانية', value: req.offerIncome,  inline: true },
+        { name: '💬 العروض',      value: `${req.offers.size} عرض`, inline: true }
+      )
+      .setTimestamp(req.timestamp);
+
+    if (req.imageUrl) e.setThumbnail(req.imageUrl);
+    embeds.push(e);
+
+    rows.push(new ActionRowBuilder().addComponents(
+      mkBtn(`myrepost_request_${requestId}`, `🔄 إعادة نشر ${i + 1}`, ButtonStyle.Success),
+      mkBtn(`view_offers_request_${requestId}`, `👁️ عروض ${i + 1}`, ButtonStyle.Secondary),
+      mkBtn(`delete_request_${requestId}`, `🗑️ حذف ${i + 1}`, ButtonStyle.Danger)
+    ));
+    i++;
+  }
+
+  const header = new EmbedBuilder()
+    .setColor('#00B4D8')
+    .setTitle(`📋 طلباتي — ${myRequests.length} طلب نشط`)
+    .setDescription('هذي طلباتك اللي لم تُغلق بعد.\nتقدر تعيد نشرها أو تشوف عروضها أو تحذفها.')
+    .setTimestamp();
+
+  await interaction.reply({ embeds: [header, ...embeds], components: rows, ephemeral: true });
 }
 
 // ══════════════════════════════════════════════════════
