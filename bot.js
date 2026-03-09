@@ -22,11 +22,11 @@ const client = new Client({
 // ══════════════════════════════════════════════════════
 //  ⚙️  إعدادات — حطها في Railway كـ Environment Variables
 // ══════════════════════════════════════════════════════
-const TOKEN              = process.env.TOKEN              || 'OTYxNjc0OTc4MTc1MTE1MzA1.G7_euu.VnM3mAWTQnttSpPt2ND8TSShp4brrdBz_g3wL0';
+const TOKEN              = process.env.TOKEN              || 'OTYxNjc0OTc4MTc1MTE1MzA1.GjKscN.T_dG3TFr5aH3znqFCMpnK7n9e7Cir3m9l2lYEQ';
 const TRADE_CHANNEL_ID   = process.env.TRADE_CHANNEL_ID   || '1480361973538361344';
 const REQUEST_CHANNEL_ID = process.env.REQUEST_CHANNEL_ID || '1480361973538361344';
 const MM_ROLE_ID         = process.env.MM_ROLE_ID         || '1451449214906273953';
-const MM_CATEGORY_ID     = process.env.MM_CATEGORY_ID     || '1176739618331316254';
+const MM_CATEGORY_ID     = process.env.MM_CATEGORY_ID     || '1477883142604853522';
 
 // ══════════════════════════════════════════════════════
 //  💾  التخزين في الذاكرة
@@ -1203,3 +1203,4 @@ async function extractImage(message) {
 // ══════════════════════════════════════════════════════
 
 client.login(TOKEN);
+
