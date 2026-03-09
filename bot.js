@@ -27,7 +27,6 @@ const TRADE_CHANNEL_ID   = process.env.TRADE_CHANNEL_ID   || '148036197353836134
 const REQUEST_CHANNEL_ID = process.env.REQUEST_CHANNEL_ID || '1480361973538361344';
 const MM_ROLE_ID         = process.env.MM_ROLE_ID         || '1451449214906273953';
 const MM_CATEGORY_ID     = process.env.MM_CATEGORY_ID     || '1477883142604853522';
-
 // ══════════════════════════════════════════════════════
 //  💾  التخزين في الذاكرة
 // ══════════════════════════════════════════════════════
