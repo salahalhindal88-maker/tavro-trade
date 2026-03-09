@@ -1199,15 +1199,21 @@ function imgRequestEmbed(title) {
 }
 
 async function extractImage(message) {
-  // ── حذف رسالة skip من الشات فوراً ──
+  // ── رسالة skip ──
   if (message.content.toLowerCase() === 'skip') {
     try { await message.delete(); } catch {}
     return null;
   }
+
   if (message.attachments.size > 0) {
     const att = message.attachments.first();
-    if (att.contentType?.startsWith('image/')) return att.url;
-    // ملف غلط — احذفه وأرسل DM
+    if (att.contentType?.startsWith('image/')) {
+      // ✅ احفظ الرابط أولاً قبل الحذف
+      const imageUrl = att.url;
+      try { await message.delete(); } catch {}
+      return imageUrl;
+    }
+    // ملف غلط
     try { await message.delete(); } catch {}
     try {
       const u = await client.users.fetch(message.author.id);
@@ -1215,7 +1221,8 @@ async function extractImage(message) {
     } catch {}
     return false;
   }
-  // رسالة نصية — احذفها وأرسل DM
+
+  // رسالة نصية بدون صورة
   try { await message.delete(); } catch {}
   try {
     const u = await client.users.fetch(message.author.id);
