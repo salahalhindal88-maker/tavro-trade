@@ -1201,4 +1201,5 @@ async function extractImage(message) {
 }
 
 // ══════════════════════════════════════════════════════
+
 client.login(TOKEN);
