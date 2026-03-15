@@ -2,14 +2,14 @@
 // ║   Steal a Brainrot — Trade Bot  v4.2 (أوامر عربية)            ║
 // ║   ميزات: تريد | طلب شي | عروض متعددة | وسيط | صور | DM        ║
 // ╚══════════════════════════════════════════════════════════════════╝
- 
+
 const {
   Client, GatewayIntentBits, EmbedBuilder,
   ActionRowBuilder, ButtonBuilder, ButtonStyle,
   ModalBuilder, TextInputBuilder, TextInputStyle,
   ChannelType, PermissionFlagsBits, Events
 } = require('discord.js');
- 
+
 const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
@@ -18,7 +18,7 @@ const client = new Client({
     GatewayIntentBits.GuildMembers,
   ]
 });
- 
+
 // ══════════════════════════════════════════════════════
 //  ⚙️  إعدادات — حطها في Railway كـ Environment Variables
 // ══════════════════════════════════════════════════════
@@ -28,7 +28,7 @@ const REQUEST_CHANNEL_ID       = process.env.REQUEST_CHANNEL_ID       || '148036
 const MM_ROLE_ID               = process.env.MM_ROLE_ID               || '1451449214906273953';
 const MM_CATEGORY_ID           = process.env.MM_CATEGORY_ID           || '1477883142604853522';
 const IMAGE_STORAGE_CHANNEL_ID = process.env.IMAGE_STORAGE_CHANNEL_ID || '1480489127643447338';
- 
+
 // ══════════════════════════════════════════════════════
 //  💾  التخزين في الذاكرة
 // ══════════════════════════════════════════════════════
@@ -36,7 +36,7 @@ const activeTrades        = new Map();
 const activeRequests      = new Map();
 const activeTickets       = new Map();
 const pendingImageUploads = new Map();
- 
+
 // ══════════════════════════════════════════════════════
 //  ✅  جاهز
 // ══════════════════════════════════════════════════════
@@ -44,13 +44,13 @@ client.once(Events.ClientReady, () => {
   console.log(`✅ البوت شغال: ${client.user.tag}`);
   client.user.setActivity('🔄 Steal a Brainrot Trades', { type: 3 });
 });
- 
+
 // ══════════════════════════════════════════════════════
 //  📨  الأوامر + التقاط الصور
 // ══════════════════════════════════════════════════════
 client.on(Events.MessageCreate, async (message) => {
   if (message.author.bot) return;
- 
+
   if (pendingImageUploads.has(message.author.id)) {
     const p = pendingImageUploads.get(message.author.id);
     const handlers = {
@@ -61,10 +61,10 @@ client.on(Events.MessageCreate, async (message) => {
     };
     if (handlers[p.step]) { await handlers[p.step](); return; }
   }
- 
+
   if (!message.content.startsWith('!')) return;
   const cmd = message.content.slice(1).trim().split(/ +/)[0];
- 
+
   const cmds = {
     'تريد':    () => sendMainMenu(message),
     'طلب':     () => sendRequestForm(message),
@@ -73,13 +73,13 @@ client.on(Events.MessageCreate, async (message) => {
     'مساعدة':  () => handleHelp(message),
     'بحث':     () => handleSearch(message),
   };
- 
+
   if (cmds[cmd]) {
     try { await message.delete(); } catch {}
     await cmds[cmd]();
   }
 });
- 
+
 // ══════════════════════════════════════════════════════
 //  🏠  القائمة الرئيسية
 // ══════════════════════════════════════════════════════
@@ -95,7 +95,7 @@ async function sendMainMenu(message) {
     .setThumbnail(message.author.displayAvatarURL({ dynamic: true }))
     .setFooter({ text: 'Steal a Brainrot Trading Bot', iconURL: client.user.displayAvatarURL() })
     .setTimestamp();
- 
+
   await message.channel.send({
     embeds: [embed],
     components: [new ActionRowBuilder().addComponents(
@@ -105,7 +105,7 @@ async function sendMainMenu(message) {
     )]
   });
 }
- 
+
 // ══════════════════════════════════════════════════════
 //  🛒  نموذج الطلب
 // ══════════════════════════════════════════════════════
@@ -130,14 +130,14 @@ async function sendRequestForm(message) {
     )]
   });
 }
- 
+
 // ══════════════════════════════════════════════════════
 //  📋  !تريداتي — تريداتك أنت فقط (أمر نصي)
 // ══════════════════════════════════════════════════════
 async function handleMyTradesMessage(message) {
   const userId   = message.author.id;
   const myTrades = [...activeTrades.entries()].filter(([, t]) => t.userId === userId && !t.locked);
- 
+
   if (myTrades.length === 0) {
     return message.channel.send({ embeds: [
       new EmbedBuilder().setColor('#FFA500')
@@ -146,11 +146,11 @@ async function handleMyTradesMessage(message) {
         .setTimestamp()
     ]});
   }
- 
+
   const embeds = [];
   const rows   = [];
   let i = 0;
- 
+
   for (const [tradeId, trade] of myTrades) {
     if (i >= 5) break;
     const e = new EmbedBuilder()
@@ -166,7 +166,7 @@ async function handleMyTradesMessage(message) {
       .setTimestamp(trade.timestamp);
     if (trade.imageUrl) e.setThumbnail(trade.imageUrl);
     embeds.push(e);
- 
+
     rows.push(new ActionRowBuilder().addComponents(
       mkBtn(`myrepost_trade_${tradeId}`,    `🔄 إعادة نشر ${i + 1}`, ButtonStyle.Success),
       mkBtn(`view_offers_trade_${tradeId}`, `👁️ عروض ${i + 1}`,      ButtonStyle.Secondary),
@@ -174,7 +174,7 @@ async function handleMyTradesMessage(message) {
     ));
     i++;
   }
- 
+
   const header = new EmbedBuilder()
     .setColor('#FF6B35')
     .setTitle(`📋 تريداتي — ${myTrades.length} تريد نشط`)
@@ -185,17 +185,17 @@ async function handleMyTradesMessage(message) {
       '• 🗑️ **حذف** — تحذف التريد نهائياً'
     )
     .setTimestamp();
- 
+
   await message.channel.send({ embeds: [header, ...embeds], components: rows });
 }
- 
+
 // ══════════════════════════════════════════════════════
 //  📋  !طلباتي — طلباتك أنت فقط (أمر نصي)
 // ══════════════════════════════════════════════════════
 async function handleMyRequestsMessage(message) {
   const userId     = message.author.id;
   const myRequests = [...activeRequests.entries()].filter(([, r]) => r.userId === userId && !r.locked);
- 
+
   if (myRequests.length === 0) {
     return message.channel.send({ embeds: [
       new EmbedBuilder().setColor('#FFA500')
@@ -204,11 +204,11 @@ async function handleMyRequestsMessage(message) {
         .setTimestamp()
     ]});
   }
- 
+
   const embeds = [];
   const rows   = [];
   let i = 0;
- 
+
   for (const [requestId, req] of myRequests) {
     if (i >= 5) break;
     const e = new EmbedBuilder()
@@ -224,7 +224,7 @@ async function handleMyRequestsMessage(message) {
       .setTimestamp(req.timestamp);
     if (req.imageUrl) e.setThumbnail(req.imageUrl);
     embeds.push(e);
- 
+
     rows.push(new ActionRowBuilder().addComponents(
       mkBtn(`myrepost_request_${requestId}`,    `🔄 إعادة نشر ${i + 1}`, ButtonStyle.Success),
       mkBtn(`view_offers_request_${requestId}`, `👁️ عروض ${i + 1}`,      ButtonStyle.Secondary),
@@ -232,7 +232,7 @@ async function handleMyRequestsMessage(message) {
     ));
     i++;
   }
- 
+
   const header = new EmbedBuilder()
     .setColor('#00B4D8')
     .setTitle(`📋 طلباتي — ${myRequests.length} طلب نشط`)
@@ -243,30 +243,30 @@ async function handleMyRequestsMessage(message) {
       '• 🗑️ **حذف** — تحذف الطلب نهائياً'
     )
     .setTimestamp();
- 
+
   await message.channel.send({ embeds: [header, ...embeds], components: rows });
 }
- 
+
 // ══════════════════════════════════════════════════════
 //  🎛️  كل الـ Interactions
 // ══════════════════════════════════════════════════════
 client.on(Events.InteractionCreate, async (interaction) => {
- 
+
   if (interaction.isButton()) {
     const id = interaction.customId;
- 
+
     // ── أزرار التقييم (تأتي في DM) ──
     if (id.startsWith('rate_')) return handleRatingButton(interaction);
- 
+
     if (id.startsWith('create_trade_'))   return interaction.showModal(buildTradeModal(interaction.user.id));
     if (id.startsWith('create_request_')) return interaction.showModal(buildRequestModal(interaction.user.id));
- 
+
     if (id === 'view_all')      return showAllInteraction(interaction);
     if (id === 'view_requests') return handleViewRequestsInteraction(interaction);
     if (id === 'view_trades')   return handleViewTradesInteraction(interaction);
     if (id === 'my_trades')     return showMyTrades(interaction);
     if (id === 'my_requests')   return showMyRequests(interaction);
- 
+
     // ── إعادة نشر تريد (من المنشور أو من تريداتي) ──
     if (id.startsWith('repost_trade_') || id.startsWith('myrepost_trade_')) {
       const tradeId = id.startsWith('myrepost_trade_')
@@ -285,7 +285,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
       await repostTrade(interaction, trade, tradeId);
       return;
     }
- 
+
     // ── إعادة نشر طلب (من المنشور أو من طلباتي) ──
     if (id.startsWith('repost_request_') || id.startsWith('myrepost_request_')) {
       const requestId = id.startsWith('myrepost_request_')
@@ -304,7 +304,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
       await repostRequest(interaction, req, requestId);
       return;
     }
- 
+
     // ── تقديم عرض على تريد ──
     if (id.startsWith('make_offer_')) {
       const tradeId = id.replace('make_offer_', '');
@@ -320,7 +320,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
           return interaction.reply({ content: '❌ قدمت عرض مسبقاً!', ephemeral: true });
       return interaction.showModal(buildOfferModal(tradeId, 'trade'));
     }
- 
+
     // ── تقديم عرض على طلب ──
     if (id.startsWith('fulfill_request_')) {
       const requestId = id.replace('fulfill_request_', '');
@@ -336,7 +336,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
           return interaction.reply({ content: '❌ قدمت عرض مسبقاً!', ephemeral: true });
       return interaction.showModal(buildOfferModal(requestId, 'request'));
     }
- 
+
     // ── عرض العروض ──
     if (id.startsWith('view_offers_')) {
       const withoutPrefix = id.replace('view_offers_', '');
@@ -349,33 +349,33 @@ client.on(Events.InteractionCreate, async (interaction) => {
         return interaction.reply({ content: '❌ فقط صاحب المنشور يشوف العروض!', ephemeral: true });
       return showOffersToOwner(interaction, post, postId, pType);
     }
- 
+
     // ── قبول عرض ──
     if (id.startsWith('accept_offer_')) {
       const parts   = id.replace('accept_offer_', '').split('__');
       const postId  = parts[0], offerId = parts[1], pType = parts[2];
       const post    = pType === 'trade' ? activeTrades.get(postId) : activeRequests.get(postId);
- 
+
       if (!post)
         return interaction.reply({ content: '❌ المنشور غير موجود!', ephemeral: true });
       if (interaction.user.id !== post.userId)
         return interaction.reply({ content: '❌ فقط صاحب المنشور يقبل!', ephemeral: true });
       if (post.locked)
         return interaction.reply({ content: '❌ قبلت عرضاً بالفعل!', ephemeral: true });
- 
+
       const offer = post.offers.get(offerId);
       if (!offer)
         return interaction.reply({ content: '❌ العرض غير موجود!', ephemeral: true });
- 
+
       post.locked = true;
       if (pType === 'trade') activeTrades.set(postId, post);
       else activeRequests.set(postId, post);
- 
+
       await interaction.reply({ embeds: [
         new EmbedBuilder().setColor('#00FF7F').setTitle('✅ قبلت العرض!')
           .setDescription(`تم قبول عرض **${offer.username}**!\nجاري فتح تيكيت الوسيط...`).setTimestamp()
       ], ephemeral: true });
- 
+
       try {
         const offerer = await client.users.fetch(offer.userId);
         await offerer.send({ embeds: [
@@ -388,7 +388,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
             ).setTimestamp()
         ]});
       } catch {}
- 
+
       const ticketPayload = pType === 'trade' ? {
         sellerId: post.userId, sellerName: post.username,
         buyerId: offer.userId, buyerName: offer.username,
@@ -410,24 +410,24 @@ client.on(Events.InteractionCreate, async (interaction) => {
       };
       return createMiddlemanTicket(interaction, ticketPayload, postId, pType);
     }
- 
+
     // ── رفض عرض ──
     if (id.startsWith('reject_offer_')) {
       const parts   = id.replace('reject_offer_', '').split('__');
       const postId  = parts[0], offerId = parts[1], pType = parts[2];
       const post    = pType === 'trade' ? activeTrades.get(postId) : activeRequests.get(postId);
- 
+
       if (!post || interaction.user.id !== post.userId)
         return interaction.reply({ content: '❌ غير مصرح!', ephemeral: true });
- 
+
       const offer = post.offers.get(offerId);
       if (!offer)
         return interaction.reply({ content: '❌ العرض غير موجود!', ephemeral: true });
- 
+
       post.offers.delete(offerId);
       if (pType === 'trade') activeTrades.set(postId, post);
       else activeRequests.set(postId, post);
- 
+
       try {
         const offerer = await client.users.fetch(offer.userId);
         await offerer.send({ embeds: [
@@ -438,7 +438,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
       } catch {}
       return interaction.reply({ content: `✅ تم رفض عرض **${offer.username}**.`, ephemeral: true });
     }
- 
+
     // ── حذف تريد ──
     if (id.startsWith('delete_trade_')) {
       const tradeId = id.replace('delete_trade_', '');
@@ -452,7 +452,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
         new EmbedBuilder().setColor('#FF0000').setTitle('🗑️ تم حذف التريد').setDescription('حذف صاحبه هذا التريد.').setTimestamp()
       ], components: [] });
     }
- 
+
     // ── حذف طلب ──
     if (id.startsWith('delete_request_')) {
       const requestId = id.replace('delete_request_', '');
@@ -466,7 +466,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
         new EmbedBuilder().setColor('#FF0000').setTitle('🗑️ تم حذف الطلب').setDescription('حذف صاحبه هذا الطلب.').setTimestamp()
       ], components: [] });
     }
- 
+
     // ── أزرار الوسيط ──
     if (id.startsWith('complete_trade_')) {
       const td = activeTickets.get(interaction.channel.id);
@@ -476,7 +476,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
         return interaction.reply({ content: '❌ هذا الزر للوسطاء فقط!', ephemeral: true });
       return completeTradeTicket(interaction, td);
     }
- 
+
     if (id.startsWith('cancel_trade_')) {
       const td = activeTickets.get(interaction.channel.id);
       if (!td) return interaction.reply({ content: '❌ ما لقيت بيانات التيكيت!', ephemeral: true });
@@ -485,7 +485,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
         return interaction.reply({ content: '❌ هذا الزر للوسطاء فقط!', ephemeral: true });
       return cancelTradeTicket(interaction, td);
     }
- 
+
     if (id.startsWith('close_ticket_')) {
       const m = await interaction.guild.members.fetch(interaction.user.id);
       if (!m.permissions.has(PermissionFlagsBits.ManageChannels) && !m.roles.cache.has(MM_ROLE_ID))
@@ -497,12 +497,12 @@ client.on(Events.InteractionCreate, async (interaction) => {
       }, 5000);
     }
   }
- 
+
   // ══════════════════════════════════════════════════════
   //  📝  Modal Submits
   // ══════════════════════════════════════════════════════
   if (interaction.isModalSubmit()) {
- 
+
     if (interaction.customId.startsWith('trade_submit_')) {
       const tradeId = `T-${interaction.user.id}-${Date.now()}`;
       activeTrades.set(tradeId, {
@@ -520,7 +520,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
       pendingImageUploads.set(interaction.user.id, { tradeId, step: 'seller_image', channelId: interaction.channel.id });
       return interaction.reply({ embeds: [imgRequestEmbed('📸 أرسل صورة الـ Brainrot الذي تعرضه')], ephemeral: true });
     }
- 
+
     if (interaction.customId.startsWith('request_submit_')) {
       const requestId = `R-${interaction.user.id}-${Date.now()}`;
       activeRequests.set(requestId, {
@@ -538,7 +538,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
       pendingImageUploads.set(interaction.user.id, { requestId, step: 'request_image', channelId: interaction.channel.id });
       return interaction.reply({ embeds: [imgRequestEmbed('📸 أرسل صورة الشي الذي تطلبه')], ephemeral: true });
     }
- 
+
     if (interaction.customId.startsWith('offer_submit_')) {
       const rest   = interaction.customId.replace('offer_submit_', '');
       const pType  = rest.startsWith('request_') ? 'request' : 'trade';
@@ -546,7 +546,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
       const post   = pType === 'trade' ? activeTrades.get(postId) : activeRequests.get(postId);
       if (!post || post.locked)
         return interaction.reply({ content: '❌ المنشور غير متاح!', ephemeral: true });
- 
+
       const offerId = `O-${interaction.user.id}-${Date.now()}`;
       const offerData = {
         offerId,
@@ -562,7 +562,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
       post.offers.set(offerId, offerData);
       if (pType === 'trade') activeTrades.set(postId, post);
       else activeRequests.set(postId, post);
- 
+
       pendingImageUploads.set(interaction.user.id, {
         step: 'offer_image', offerId, postId, postType: pType, channelId: interaction.channel.id
       });
@@ -570,7 +570,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
     }
   }
 });
- 
+
 // ══════════════════════════════════════════════════════
 //  📷  معالجة الصور
 // ══════════════════════════════════════════════════════
@@ -592,7 +592,7 @@ async function handleSellerImageUpload(message, p) {
   } catch {}
   await publishTrade(message, trade, p.tradeId);
 }
- 
+
 async function handleRequestImageUpload(message, p) {
   const req = activeRequests.get(p.requestId);
   if (!req) { pendingImageUploads.delete(message.author.id); return; }
@@ -610,22 +610,22 @@ async function handleRequestImageUpload(message, p) {
   } catch {}
   await publishRequest(message, req, p.requestId);
 }
- 
+
 async function handleOfferImageUpload(message, p) {
   const post  = p.postType === 'trade' ? activeTrades.get(p.postId) : activeRequests.get(p.postId);
   if (!post)  { pendingImageUploads.delete(message.author.id); return; }
   const offer = post.offers.get(p.offerId);
   if (!offer) { pendingImageUploads.delete(message.author.id); return; }
- 
+
   const img = await extractImage(message);
   if (img === false) return;
- 
+
   offer.imageUrl = img;
   post.offers.set(p.offerId, offer);
   if (p.postType === 'trade') activeTrades.set(p.postId, post);
   else activeRequests.set(p.postId, post);
   pendingImageUploads.delete(message.author.id);
- 
+
   try {
     const me = await client.users.fetch(message.author.id);
     await me.send({ embeds: [
@@ -638,7 +638,7 @@ async function handleOfferImageUpload(message, p) {
         ).setTimestamp()
     ]});
   } catch {}
- 
+
   try {
     const owner       = await client.users.fetch(post.userId);
     const totalOffers = post.offers.size;
@@ -660,14 +660,14 @@ async function handleOfferImageUpload(message, p) {
     await owner.send({ embeds: [dm] });
   } catch {}
 }
- 
+
 async function handleSupplierImageUpload(message, p) {
   await handleOfferImageUpload(message, {
     ...p, step: 'offer_image',
     offerId: p.offerId, postId: p.requestId, postType: 'request'
   });
 }
- 
+
 // ══════════════════════════════════════════════════════
 //  📢  نشر التريد
 // ══════════════════════════════════════════════════════
@@ -691,7 +691,7 @@ function buildCompactTradeEmbed(trade, tradeId) {
   if (trade.imageUrl) e.setThumbnail(trade.imageUrl);
   return e;
 }
- 
+
 function buildCompactRequestEmbed(req, requestId) {
   const rep = reputationField(req.userId);
   const e = new EmbedBuilder()
@@ -712,26 +712,38 @@ function buildCompactRequestEmbed(req, requestId) {
   if (req.imageUrl) e.setThumbnail(req.imageUrl);
   return e;
 }
- 
+
 async function publishTrade(message, trade, tradeId) {
   const embed = buildCompactTradeEmbed(trade, tradeId);
- 
-  const ch = client.channels.cache.get(TRADE_CHANNEL_ID);
-  if (ch) await ch.send({
-    embeds: [embed],
-    components: [
-      new ActionRowBuilder().addComponents(
-        mkBtn(`make_offer_${tradeId}`,        '💬 تقديم عرض', ButtonStyle.Primary),
-        mkBtn(`view_offers_trade_${tradeId}`, '👁️ عروضي',     ButtonStyle.Secondary),
-        mkBtn(`delete_trade_${tradeId}`,      '🗑️ حذف',       ButtonStyle.Danger)
-      ),
-      new ActionRowBuilder().addComponents(
-        mkBtn(`repost_trade_${tradeId}`, '🔄 إعادة نشر', ButtonStyle.Success),
-        mkBtn('my_trades',               '📋 تريداتي',    ButtonStyle.Secondary)
-      )
-    ]
-  });
- 
+
+  // نشر التريد في القناة
+  try {
+    const ch = await client.channels.fetch(TRADE_CHANNEL_ID).catch(() => null);
+    if (!ch) {
+      console.error('❌ ما لقيت قناة التريدات! تأكد من TRADE_CHANNEL_ID');
+      return;
+    }
+    await ch.send({
+      embeds: [embed],
+      components: [
+        new ActionRowBuilder().addComponents(
+          mkBtn(`make_offer_${tradeId}`,        '💬 تقديم عرض', ButtonStyle.Primary),
+          mkBtn(`view_offers_trade_${tradeId}`, '👁️ عروضي',     ButtonStyle.Secondary),
+          mkBtn(`delete_trade_${tradeId}`,      '🗑️ حذف',       ButtonStyle.Danger)
+        ),
+        new ActionRowBuilder().addComponents(
+          mkBtn(`repost_trade_${tradeId}`, '🔄 إعادة نشر', ButtonStyle.Success),
+          mkBtn('my_trades',               '📋 تريداتي',    ButtonStyle.Secondary)
+        )
+      ]
+    });
+    console.log(`✅ نُشر تريد: ${tradeId}`);
+  } catch (err) {
+    console.error('❌ خطأ في نشر التريد:', err.message);
+    return;
+  }
+
+  // DM تأكيد للبائع
   const confirmEmbed = new EmbedBuilder().setColor('#00FF7F').setTitle('✅ تم نشر تريدك!')
     .setDescription(
       `نُشر تريدك في <#${TRADE_CHANNEL_ID}> بنجاح! 🎉\n` +
@@ -743,39 +755,54 @@ async function publishTrade(message, trade, tradeId) {
       { name: '💰 مقابل', value: trade.wantItem,                               inline: true },
       { name: '🖼️ صورة', value: trade.imageUrl ? '✅ مرفقة' : '❌ بدون صورة', inline: true }
     ).setTimestamp();
- 
-  let dmSent = false;
-  try { const owner = await client.users.fetch(trade.userId); await owner.send({ embeds: [confirmEmbed] }); dmSent = true; } catch {}
-  if (!dmSent) {
+
+  try {
+    const owner = await client.users.fetch(trade.userId);
+    await owner.send({ embeds: [confirmEmbed] });
+  } catch {
+    // لو DM مغلق — أرسل في قناة الأمر وتحذف
     try {
-      const fb = await message.channel.send({ content: `<@${trade.userId}>`, embeds: [confirmEmbed] });
-      setTimeout(() => fb.delete().catch(() => {}), 8000);
+      const fallbackCh = await client.channels.fetch(trade.channelId).catch(() => null);
+      if (fallbackCh) {
+        const fb = await fallbackCh.send({ content: `<@${trade.userId}>`, embeds: [confirmEmbed] });
+        setTimeout(() => fb.delete().catch(() => {}), 8000);
+      }
     } catch {}
   }
 }
- 
+
 // ══════════════════════════════════════════════════════
 //  📢  نشر الطلب
 // ══════════════════════════════════════════════════════
 async function publishRequest(message, req, requestId) {
   const embed = buildCompactRequestEmbed(req, requestId);
- 
-  const ch = client.channels.cache.get(REQUEST_CHANNEL_ID);
-  if (ch) await ch.send({
-    embeds: [embed],
-    components: [
-      new ActionRowBuilder().addComponents(
-        mkBtn(`fulfill_request_${requestId}`,     '💬 تقديم عرض', ButtonStyle.Success),
-        mkBtn(`view_offers_request_${requestId}`, '👁️ عروضي',     ButtonStyle.Secondary),
-        mkBtn(`delete_request_${requestId}`,      '🗑️ حذف',       ButtonStyle.Danger)
-      ),
-      new ActionRowBuilder().addComponents(
-        mkBtn(`repost_request_${requestId}`, '🔄 إعادة نشر', ButtonStyle.Success),
-        mkBtn('my_requests',                 '📋 طلباتي',     ButtonStyle.Secondary)
-      )
-    ]
-  });
- 
+
+  try {
+    const ch = await client.channels.fetch(REQUEST_CHANNEL_ID).catch(() => null);
+    if (!ch) {
+      console.error('❌ ما لقيت قناة الطلبات! تأكد من REQUEST_CHANNEL_ID');
+      return;
+    }
+    await ch.send({
+      embeds: [embed],
+      components: [
+        new ActionRowBuilder().addComponents(
+          mkBtn(`fulfill_request_${requestId}`,     '💬 تقديم عرض', ButtonStyle.Success),
+          mkBtn(`view_offers_request_${requestId}`, '👁️ عروضي',     ButtonStyle.Secondary),
+          mkBtn(`delete_request_${requestId}`,      '🗑️ حذف',       ButtonStyle.Danger)
+        ),
+        new ActionRowBuilder().addComponents(
+          mkBtn(`repost_request_${requestId}`, '🔄 إعادة نشر', ButtonStyle.Success),
+          mkBtn('my_requests',                 '📋 طلباتي',     ButtonStyle.Secondary)
+        )
+      ]
+    });
+    console.log(`✅ نُشر طلب: ${requestId}`);
+  } catch (err) {
+    console.error('❌ خطأ في نشر الطلب:', err.message);
+    return;
+  }
+
   const confirmEmbed = new EmbedBuilder().setColor('#00B4D8').setTitle('✅ تم نشر طلبك!')
     .setDescription(
       `نُشر طلبك في <#${REQUEST_CHANNEL_ID}> بنجاح! 🎉\n` +
@@ -787,17 +814,21 @@ async function publishRequest(message, req, requestId) {
       { name: '🎁 مقابله', value: req.offerItem,                               inline: true },
       { name: '🖼️ صورة',  value: req.imageUrl ? '✅ مرفقة' : '❌ بدون صورة', inline: true }
     ).setTimestamp();
- 
-  let dmSent = false;
-  try { const owner = await client.users.fetch(req.userId); await owner.send({ embeds: [confirmEmbed] }); dmSent = true; } catch {}
-  if (!dmSent) {
+
+  try {
+    const owner = await client.users.fetch(req.userId);
+    await owner.send({ embeds: [confirmEmbed] });
+  } catch {
     try {
-      const fb = await message.channel.send({ content: `<@${req.userId}>`, embeds: [confirmEmbed] });
-      setTimeout(() => fb.delete().catch(() => {}), 8000);
+      const fallbackCh = await client.channels.fetch(req.channelId).catch(() => null);
+      if (fallbackCh) {
+        const fb = await fallbackCh.send({ content: `<@${req.userId}>`, embeds: [confirmEmbed] });
+        setTimeout(() => fb.delete().catch(() => {}), 8000);
+      }
     } catch {}
   }
 }
- 
+
 // ══════════════════════════════════════════════════════
 //  👁️  عرض العروض لصاحب المنشور
 // ══════════════════════════════════════════════════════
@@ -807,10 +838,10 @@ async function showOffersToOwner(interaction, post, postId, pType) {
       new EmbedBuilder().setColor('#FFA500').setTitle('📭 ما في عروض بعد')
         .setDescription('لم يصلك أي عرض حتى الآن. انتظر قليلاً!').setTimestamp()
     ], ephemeral: true });
- 
+
   const embeds = [], rows = [];
   let i = 0;
- 
+
   for (const [offerId, offer] of post.offers) {
     if (i >= 5) break;
     const offerEmbed = new EmbedBuilder()
@@ -824,35 +855,35 @@ async function showOffersToOwner(interaction, post, postId, pType) {
       ).setTimestamp(offer.timestamp);
     if (offer.imageUrl) offerEmbed.setThumbnail(offer.imageUrl);
     embeds.push(offerEmbed);
- 
+
     rows.push(new ActionRowBuilder().addComponents(
       mkBtn(`accept_offer_${postId}__${offerId}__${pType}`, `✅ قبول عرض ${i + 1}`, ButtonStyle.Success),
       mkBtn(`reject_offer_${postId}__${offerId}__${pType}`, `❌ رفض عرض ${i + 1}`,  ButtonStyle.Danger)
     ));
     i++;
   }
- 
+
   const header = new EmbedBuilder().setColor('#FFD700')
     .setTitle(`📬 العروض على ${pType === 'trade' ? 'تريدك' : 'طلبك'} — ${post.offers.size} عرض`)
     .setDescription('اضغط **✅ قبول** على العرض اللي يناسبك، أو **❌ رفض** للتخلص منه.\n> التريد يبقى مفتوح حتى تقبل عرضاً واحداً.')
     .setTimestamp();
- 
+
   await interaction.reply({ embeds: [header, ...embeds], components: rows, ephemeral: true });
 }
- 
+
 // ══════════════════════════════════════════════════════
 //  📋  تريداتي / طلباتي من الزر
 // ══════════════════════════════════════════════════════
 async function showMyTrades(interaction) {
   const userId   = interaction.user.id;
   const myTrades = [...activeTrades.entries()].filter(([, t]) => t.userId === userId && !t.locked);
- 
+
   if (myTrades.length === 0)
     return interaction.reply({ embeds: [
       new EmbedBuilder().setColor('#FFA500').setTitle('📋 تريداتي')
         .setDescription('ما عندك تريدات نشطة!\nاستخدم `!تريد` لإنشاء تريد.').setTimestamp()
     ], ephemeral: true });
- 
+
   const embeds = [], rows = [];
   let i = 0;
   for (const [tradeId, trade] of myTrades) {
@@ -877,17 +908,17 @@ async function showMyTrades(interaction) {
     .setDescription('تريداتك النشطة — تقدر تعيد نشرها أو تشوف عروضها أو تحذفها.').setTimestamp();
   await interaction.reply({ embeds: [header, ...embeds], components: rows, ephemeral: true });
 }
- 
+
 async function showMyRequests(interaction) {
   const userId     = interaction.user.id;
   const myRequests = [...activeRequests.entries()].filter(([, r]) => r.userId === userId && !r.locked);
- 
+
   if (myRequests.length === 0)
     return interaction.reply({ embeds: [
       new EmbedBuilder().setColor('#FFA500').setTitle('📋 طلباتي')
         .setDescription('ما عندك طلبات نشطة!\nاستخدم `!طلب` لإنشاء طلب.').setTimestamp()
     ], ephemeral: true });
- 
+
   const embeds = [], rows = [];
   let i = 0;
   for (const [requestId, req] of myRequests) {
@@ -912,13 +943,13 @@ async function showMyRequests(interaction) {
     .setDescription('طلباتك النشطة — تقدر تعيد نشرها أو تشوف عروضها أو تحذفها.').setTimestamp();
   await interaction.reply({ embeds: [header, ...embeds], components: rows, ephemeral: true });
 }
- 
+
 // ══════════════════════════════════════════════════════
 //  🔄  إعادة نشر تريد
 // ══════════════════════════════════════════════════════
 async function repostTrade(source, trade, tradeId) {
   const embed = buildCompactTradeEmbed(trade, tradeId);
- 
+
   const ch = client.channels.cache.get(TRADE_CHANNEL_ID);
   if (ch) await ch.send({
     embeds: [embed],
@@ -935,13 +966,13 @@ async function repostTrade(source, trade, tradeId) {
     ]
   });
 }
- 
+
 // ══════════════════════════════════════════════════════
 //  🔄  إعادة نشر طلب
 // ══════════════════════════════════════════════════════
 async function repostRequest(source, req, requestId) {
   const embed = buildCompactRequestEmbed(req, requestId);
- 
+
   const ch = client.channels.cache.get(REQUEST_CHANNEL_ID);
   if (ch) await ch.send({
     embeds: [embed],
@@ -958,7 +989,7 @@ async function repostRequest(source, req, requestId) {
     ]
   });
 }
- 
+
 // ══════════════════════════════════════════════════════
 //  📊  عرض عام
 // ══════════════════════════════════════════════════════
@@ -978,7 +1009,7 @@ async function handleViewTradesInteraction(interaction) {
   }
   await interaction.reply({ embeds: [embed], ephemeral: true });
 }
- 
+
 async function handleViewRequestsInteraction(interaction) {
   if (!activeRequests.size) return interaction.reply({ embeds: [
     new EmbedBuilder().setColor('#FFA500').setTitle('🛒 الطلبات النشطة').setDescription('❌ ما في طلبات!').setTimestamp()
@@ -995,7 +1026,7 @@ async function handleViewRequestsInteraction(interaction) {
   }
   await interaction.reply({ embeds: [embed], ephemeral: true });
 }
- 
+
 async function showAllInteraction(interaction) {
   await interaction.reply({ embeds: [
     new EmbedBuilder().setColor('#5865F2').setTitle('📊 نظرة عامة — Steal a Brainrot')
@@ -1006,7 +1037,7 @@ async function showAllInteraction(interaction) {
       ).setTimestamp()
   ], ephemeral: true });
 }
- 
+
 // ══════════════════════════════════════════════════════
 //  ⚖️  تيكيت الوسيط
 // ══════════════════════════════════════════════════════
@@ -1016,10 +1047,10 @@ async function createMiddlemanTicket(source, data, postId, type) {
   const partyB = isTrade ? data.buyerId  : data.supplierId;
   const nameA  = isTrade ? data.sellerName : data.requesterName;
   const nameB  = isTrade ? data.buyerName  : data.supplierName;
- 
+
   const channelName = `${isTrade ? 'تريد' : 'طلب'}-${nameA}-${nameB}`
     .slice(0, 90).replace(/\s+/g, '-').replace(/[^\u0600-\u06FFa-z0-9\-]/gi, '');
- 
+
   let ticketChannel;
   try {
     ticketChannel = await guild.channels.create({
@@ -1037,10 +1068,10 @@ async function createMiddlemanTicket(source, data, postId, type) {
     try { await source.channel.send('❌ ما قدرت أنشئ تيكيت! تأكد صلاحيات البوت.'); } catch {}
     return;
   }
- 
+
   activeTickets.set(ticketChannel.id, { ...data, type, postId, status: 'pending' });
   scheduleMMReminder(ticketChannel.id, postId);
- 
+
   const ticketEmbed = new EmbedBuilder()
     .setColor('#FFD700')
     .setTitle(`⚖️ تيكيت وسيط — ${isTrade ? 'تريد' : 'طلب'} Steal a Brainrot`)
@@ -1082,7 +1113,7 @@ async function createMiddlemanTicket(source, data, postId, type) {
     )
     .setFooter({ text: `ID: ${postId.slice(-6)} • جميع العمليات داخل السيرفر فقط 🔒`, iconURL: client.user.displayAvatarURL() })
     .setTimestamp();
- 
+
   await ticketChannel.send({
     content: `📣 <@${partyA}> <@${partyB}> <@&${MM_ROLE_ID}>`,
     embeds: [ticketEmbed],
@@ -1092,7 +1123,7 @@ async function createMiddlemanTicket(source, data, postId, type) {
       mkBtn(`close_ticket_${postId}`,   '🔒 إغلاق',       ButtonStyle.Secondary)
     )]
   });
- 
+
   const imgs = [];
   const imgA = isTrade ? data.sellerImageUrl  : data.requestImageUrl;
   const imgB = isTrade ? data.buyerImageUrl   : data.supplierImageUrl;
@@ -1102,7 +1133,7 @@ async function createMiddlemanTicket(source, data, postId, type) {
   if (imgB) imgs.push(new EmbedBuilder().setColor('#00B4D8').setTitle(lblB).setImage(imgB));
   if (imgs.length) await ticketChannel.send({ embeds: imgs });
 }
- 
+
 // ══════════════════════════════════════════════════════
 //  ✅  إتمام العملية
 // ══════════════════════════════════════════════════════
@@ -1111,7 +1142,7 @@ async function completeTradeTicket(interaction, td) {
   const isTrade = td.type === 'trade';
   const pA = isTrade ? td.sellerId : td.requesterId, pB = isTrade ? td.buyerId : td.supplierId;
   const nA = isTrade ? td.sellerName : td.requesterName, nB = isTrade ? td.buyerName : td.supplierName;
- 
+
   await interaction.reply({ embeds: [
     new EmbedBuilder().setColor('#00FF7F').setTitle('🎉 تمت العملية بنجاح!')
       .setDescription(`أكد الوسيط **${interaction.user.username}** إتمام العملية!`)
@@ -1121,7 +1152,7 @@ async function completeTradeTicket(interaction, td) {
         { name: '🎁 الشي', value: isTrade ? td.offerItem : td.wantItem, inline: false }
       ).setFooter({ text: `أشرف عليه: ${interaction.user.username}` }).setTimestamp()
   ]});
- 
+
   for (const [uid, other] of [[pA, nB], [pB, nA]]) {
     try {
       const u = await client.users.fetch(uid);
@@ -1136,14 +1167,14 @@ async function completeTradeTicket(interaction, td) {
       ]});
     } catch {}
   }
- 
+
   // إرسال طلب تقييم للطرفين
   const tradeDesc = isTrade
     ? `تريد: ${td.offerItem} ↔ ${td.buyerItem}`
     : `طلب: ${td.wantItem} ↔ ${td.supplierItem}`;
   await sendRatingRequest(pA, pB, nB, tradeDesc);
   await sendRatingRequest(pB, pA, nA, tradeDesc);
- 
+
   await interaction.channel.send('🔒 سيُغلق هذا التيكيت تلقائياً خلال **10 ثواني**...');
   setTimeout(async () => {
     try { await interaction.channel.delete(); } catch {}
@@ -1151,7 +1182,7 @@ async function completeTradeTicket(interaction, td) {
     if (isTrade) activeTrades.delete(td.postId); else activeRequests.delete(td.postId);
   }, 10000);
 }
- 
+
 // ══════════════════════════════════════════════════════
 //  ❌  إلغاء العملية
 // ══════════════════════════════════════════════════════
@@ -1159,7 +1190,7 @@ async function cancelTradeTicket(interaction, td) {
   td.status = 'cancelled';
   const isTrade = td.type === 'trade';
   const pA = isTrade ? td.sellerId : td.requesterId, pB = isTrade ? td.buyerId : td.supplierId;
- 
+
   await interaction.reply({ embeds: [
     new EmbedBuilder().setColor('#FF0000').setTitle('❌ تم إلغاء العملية')
       .setDescription(`ألغى الوسيط **${interaction.user.username}** هذه العملية.`)
@@ -1168,7 +1199,7 @@ async function cancelTradeTicket(interaction, td) {
         { name: isTrade ? '🛒 المشتري' : '🎁 المورّد', value: `<@${pB}>`, inline: true }
       ).setTimestamp()
   ]});
- 
+
   for (const uid of [pA, pB]) {
     try {
       const u = await client.users.fetch(uid);
@@ -1178,7 +1209,7 @@ async function cancelTradeTicket(interaction, td) {
       ]});
     } catch {}
   }
- 
+
   await interaction.channel.send('🔒 سيُغلق هذا التيكيت تلقائياً خلال **10 ثواني**...');
   setTimeout(async () => {
     try { await interaction.channel.delete(); } catch {}
@@ -1186,7 +1217,7 @@ async function cancelTradeTicket(interaction, td) {
     if (isTrade) activeTrades.delete(td.postId); else activeRequests.delete(td.postId);
   }, 10000);
 }
- 
+
 // ══════════════════════════════════════════════════════
 //  ❓  المساعدة
 // ══════════════════════════════════════════════════════
@@ -1250,7 +1281,7 @@ async function handleHelp(message) {
       .setTimestamp()
   ]});
 }
- 
+
 // ══════════════════════════════════════════════════════
 //  🛠️  بنّاءو الـ Modals
 // ══════════════════════════════════════════════════════
@@ -1266,7 +1297,7 @@ function buildTradeModal(userId) {
       r(inp('notes',      '📝 ملاحظات إضافية (اختياري)',      'شروط التريد أو أي تفاصيل...',           false, true))
     );
 }
- 
+
 function buildRequestModal(userId) {
   return new ModalBuilder()
     .setCustomId(`request_submit_${userId}`)
@@ -1279,7 +1310,7 @@ function buildRequestModal(userId) {
       r(inp('notes',        '📝 ملاحظات إضافية (اختياري)',        'أي شروط إضافية...',          false, true))
     );
 }
- 
+
 function buildOfferModal(postId, postType) {
   return new ModalBuilder()
     .setCustomId(`offer_submit_${postType}_${postId}`)
@@ -1291,7 +1322,7 @@ function buildOfferModal(postId, postType) {
       r(inp('offer_notes',    '📝 ملاحظات إضافية (اختياري)',    'أي تفاصيل...',               false, true))
     );
 }
- 
+
 // ══════════════════════════════════════════════════════
 //  🛠️  دوال مساعدة
 // ══════════════════════════════════════════════════════
@@ -1302,16 +1333,16 @@ function inp(id, label, placeholder, required = true, paragraph = false) {
     .setPlaceholder(placeholder).setRequired(required)
     .setMaxLength(paragraph ? 200 : 100);
 }
- 
+
 function r(component)            { return new ActionRowBuilder().addComponents(component); }
 function mkBtn(id, label, style) { return new ButtonBuilder().setCustomId(id).setLabel(label).setStyle(style); }
- 
+
 function imgRequestEmbed(title) {
   return new EmbedBuilder().setColor('#FFD700').setTitle(title)
     .setDescription('أرسل الصورة مباشرة في هذي القناة.\n> اكتب `skip` لتخطي هذي الخطوة')
     .setTimestamp();
 }
- 
+
 async function extractImage(message) {
   if (message.content.toLowerCase() === 'skip') {
     try { await message.delete(); } catch {}
@@ -1346,12 +1377,12 @@ async function extractImage(message) {
   } catch {}
   return false;
 }
- 
- 
+
+
 // ══════════════════════════════════════════════════════
 //  ⭐  نظام التقييم والسمعة
 // ══════════════════════════════════════════════════════
- 
+
 // حساب متوسط التقييم
 function getReputation(userId) {
   const rep = userReputations.get(userId);
@@ -1362,19 +1393,19 @@ function getReputation(userId) {
     stars: getStars(rep.total / rep.count)
   };
 }
- 
+
 function getStars(avg) {
   const full  = Math.round(avg);
   return '⭐'.repeat(full) + '☆'.repeat(5 - full);
 }
- 
+
 // بناء نص السمعة للـ Embed
 function reputationField(userId) {
   const rep = getReputation(userId);
   if (!rep) return '🆕 جديد — لا يوجد تقييم بعد';
   return `${rep.stars} ${rep.avg}/5 (${rep.count} تقييم)`;
 }
- 
+
 // إرسال طلب التقييم بعد اكتمال التريد
 async function sendRatingRequest(userId, targetId, targetName, tradeDesc) {
   pendingRatings.set(userId, { targetId, targetName, tradeDesc });
@@ -1389,7 +1420,7 @@ async function sendRatingRequest(userId, targetId, targetName, tradeDesc) {
             `كيف كانت تجربتك مع **${targetName}**؟
 ` +
             `> ${tradeDesc}
- 
+
 ` +
             'اضغط على التقييم المناسب:'
           )
@@ -1410,11 +1441,11 @@ async function sendRatingRequest(userId, targetId, targetName, tradeDesc) {
     });
   } catch {}
 }
- 
+
 // معالجة ضغطة زر التقييم (في DM)
 async function handleRatingButton(interaction) {
   const id = interaction.customId;
- 
+
   if (id.startsWith('rate_skip_')) {
     pendingRatings.delete(interaction.user.id);
     return interaction.update({ embeds: [
@@ -1422,16 +1453,16 @@ async function handleRatingButton(interaction) {
         .setTitle('⏭️ تم تخطي التقييم').setTimestamp()
     ], components: [] });
   }
- 
+
   if (id.startsWith('rate_')) {
     const parts    = id.replace('rate_', '').split('__');
     const targetId = parts[0];
     const stars    = parseInt(parts[1]);
- 
+
     const pending = pendingRatings.get(interaction.user.id);
     if (!pending || pending.targetId !== targetId)
       return interaction.reply({ content: '❌ انتهت صلاحية هذا التقييم!', ephemeral: true });
- 
+
     // تسجيل التقييم
     if (!userReputations.has(targetId))
       userReputations.set(targetId, { total: 0, count: 0, history: [] });
@@ -1441,9 +1472,9 @@ async function handleRatingButton(interaction) {
     rep.history.push({ from: interaction.user.id, stars, date: new Date() });
     userReputations.set(targetId, rep);
     pendingRatings.delete(interaction.user.id);
- 
+
     const newAvg = (rep.total / rep.count).toFixed(1);
- 
+
     await interaction.update({ embeds: [
       new EmbedBuilder().setColor('#00FF7F')
         .setTitle('✅ تم حفظ تقييمك!')
@@ -1451,7 +1482,7 @@ async function handleRatingButton(interaction) {
 متوسطه الحالي: ${getStars(parseFloat(newAvg))} ${newAvg}/5`)
         .setTimestamp()
     ], components: [] });
- 
+
     // إشعار المُقيَّم
     try {
       const target = await client.users.fetch(targetId);
@@ -1465,7 +1496,7 @@ async function handleRatingButton(interaction) {
     } catch {}
   }
 }
- 
+
 // ══════════════════════════════════════════════════════
 //  🔔  تنبيه الوسطاء (بعد 10 دقايق بدون رد)
 // ══════════════════════════════════════════════════════
@@ -1474,7 +1505,7 @@ async function scheduleMMReminder(ticketChannelId, postId) {
     // لو التيكيت لا زال pending
     const td = activeTickets.get(ticketChannelId);
     if (!td || td.status !== 'pending') return;
- 
+
     try {
       const ch = client.channels.cache.get(ticketChannelId);
       if (!ch) return;
@@ -1491,13 +1522,13 @@ async function scheduleMMReminder(ticketChannelId, postId) {
     } catch {}
   }, 10 * 60 * 1000); // 10 دقايق
 }
- 
+
 // ══════════════════════════════════════════════════════
 //  🔍  بحث في التريدات والطلبات
 // ══════════════════════════════════════════════════════
 async function handleSearch(message) {
   const query = message.content.slice(1).trim().split(/ +/).slice(1).join(' ').toLowerCase();
- 
+
   if (!query || query.length < 2) {
     return message.channel.send({ embeds: [
       new EmbedBuilder().setColor('#FFA500')
@@ -1506,7 +1537,7 @@ async function handleSearch(message) {
         .setTimestamp()
     ]});
   }
- 
+
   const matchedTrades   = [...activeTrades.entries()].filter(([, t]) =>
     !t.locked && (
       t.offerItem.toLowerCase().includes(query) ||
@@ -1519,7 +1550,7 @@ async function handleSearch(message) {
       r.offerItem.toLowerCase().includes(query)
     )
   );
- 
+
   if (matchedTrades.length === 0 && matchedRequests.length === 0) {
     return message.channel.send({ embeds: [
       new EmbedBuilder().setColor('#FFA500')
@@ -1528,13 +1559,13 @@ async function handleSearch(message) {
         .setTimestamp()
     ]});
   }
- 
+
   const embed = new EmbedBuilder()
     .setColor('#5865F2')
     .setTitle(`🔍 نتائج البحث عن: "${query}"`)
     .setDescription(`وجدت **${matchedTrades.length}** تريد و **${matchedRequests.length}** طلب`)
     .setTimestamp();
- 
+
   let count = 0;
   for (const [, t] of matchedTrades) {
     if (count++ >= 5) break;
@@ -1558,9 +1589,9 @@ async function handleSearch(message) {
       inline: false
     });
   }
- 
+
   await message.channel.send({ embeds: [embed] });
 }
- 
+
 // ══════════════════════════════════════════════════════
 client.login(TOKEN);
