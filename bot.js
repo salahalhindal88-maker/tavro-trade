@@ -36,6 +36,8 @@ const activeTrades        = new Map();
 const activeRequests      = new Map();
 const activeTickets       = new Map();
 const pendingImageUploads = new Map();
+const userReputations     = new Map(); // userId → { total, count, history[] }
+const pendingRatings      = new Map(); // userId → { targetId, targetName, tradeDesc }
 
 // ══════════════════════════════════════════════════════
 //  ✅  جاهز
@@ -50,6 +52,7 @@ client.once(Events.ClientReady, () => {
 // ══════════════════════════════════════════════════════
 client.on(Events.MessageCreate, async (message) => {
   if (message.author.bot) return;
+  console.log(`🔔 MESSAGE: ${message.author.username} | "${message.content}" | pending: ${pendingImageUploads.has(message.author.id)}`);
 
   if (pendingImageUploads.has(message.author.id)) {
     console.log(`📨 pending found for ${message.author.username} | content: "${message.content}" | attachments: ${message.attachments.size}`);
