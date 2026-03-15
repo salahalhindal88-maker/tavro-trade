@@ -52,7 +52,9 @@ client.on(Events.MessageCreate, async (message) => {
   if (message.author.bot) return;
 
   if (pendingImageUploads.has(message.author.id)) {
+    console.log(`📨 pending found for ${message.author.username} | content: "${message.content}" | attachments: ${message.attachments.size}`);
     const p = pendingImageUploads.get(message.author.id);
+    console.log(`📋 pending step: ${p.step}`);
     const handlers = {
       seller_image:   () => handleSellerImageUpload(message, p),
       offer_image:    () => handleOfferImageUpload(message, p),
