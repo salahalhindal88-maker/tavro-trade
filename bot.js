@@ -578,10 +578,18 @@ async function handleSellerImageUpload(message, p) {
   const trade = activeTrades.get(p.tradeId);
   if (!trade) { pendingImageUploads.delete(message.author.id); return; }
   const img = await extractImage(message);
-  if (img === false) return;
-  trade.imageUrl = img;
+  if (img === false) return; // خطأ — ينتظر صورة صحيحة
+  trade.imageUrl = img || null; // null = skip
   activeTrades.set(p.tradeId, trade);
   pendingImageUploads.delete(message.author.id);
+  // إشعار المستخدم إن التريد جاري نشره
+  try {
+    const ch = client.channels.cache.get(p.channelId);
+    if (ch) {
+      const fb = await ch.send({ content: `<@${message.author.id}> ⏳ جاري نشر تريدك...` });
+      setTimeout(() => fb.delete().catch(() => {}), 4000);
+    }
+  } catch {}
   await publishTrade(message, trade, p.tradeId);
 }
  
@@ -590,9 +598,16 @@ async function handleRequestImageUpload(message, p) {
   if (!req) { pendingImageUploads.delete(message.author.id); return; }
   const img = await extractImage(message);
   if (img === false) return;
-  req.imageUrl = img;
+  req.imageUrl = img || null;
   activeRequests.set(p.requestId, req);
   pendingImageUploads.delete(message.author.id);
+  try {
+    const ch = client.channels.cache.get(p.channelId);
+    if (ch) {
+      const fb = await ch.send({ content: `<@${message.author.id}> ⏳ جاري نشر طلبك...` });
+      setTimeout(() => fb.delete().catch(() => {}), 4000);
+    }
+  } catch {}
   await publishRequest(message, req, p.requestId);
 }
  
@@ -1549,4 +1564,3 @@ async function handleSearch(message) {
  
 // ══════════════════════════════════════════════════════
 client.login(TOKEN);
- 
