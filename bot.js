@@ -575,22 +575,22 @@ client.on(Events.InteractionCreate, async (interaction) => {
 //  📷  معالجة الصور
 // ══════════════════════════════════════════════════════
 async function handleSellerImageUpload(message, p) {
+  console.log('📸 handleSellerImageUpload - step:', p.step, 'content:', message.content);
   const trade = activeTrades.get(p.tradeId);
-  if (!trade) { pendingImageUploads.delete(message.author.id); return; }
+  if (!trade) {
+    console.log('❌ trade not found:', p.tradeId);
+    pendingImageUploads.delete(message.author.id);
+    return;
+  }
   const img = await extractImage(message);
-  if (img === false) return; // خطأ — ينتظر صورة صحيحة
-  trade.imageUrl = img || null; // null = skip
+  console.log('📸 img result:', img);
+  if (img === false) return;
+  trade.imageUrl = img || null;
   activeTrades.set(p.tradeId, trade);
   pendingImageUploads.delete(message.author.id);
-  // إشعار المستخدم إن التريد جاري نشره
-  try {
-    const ch = client.channels.cache.get(p.channelId);
-    if (ch) {
-      const fb = await ch.send({ content: `<@${message.author.id}> ⏳ جاري نشر تريدك...` });
-      setTimeout(() => fb.delete().catch(() => {}), 4000);
-    }
-  } catch {}
+  console.log('🚀 calling publishTrade...');
   await publishTrade(message, trade, p.tradeId);
+  console.log('✅ publishTrade done');
 }
 
 async function handleRequestImageUpload(message, p) {
