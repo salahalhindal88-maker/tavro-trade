@@ -28,6 +28,7 @@ const REQUEST_CHANNEL_ID       = process.env.REQUEST_CHANNEL_ID       || '148036
 const MM_ROLE_ID               = process.env.MM_ROLE_ID               || '1451449214906273953';
 const MM_CATEGORY_ID           = process.env.MM_CATEGORY_ID           || '1477883142604853522';
 const IMAGE_STORAGE_CHANNEL_ID = process.env.IMAGE_STORAGE_CHANNEL_ID || '1480489127643447338';
+ 
 // ══════════════════════════════════════════════════════
 //  💾  التخزين في الذاكرة
 // ══════════════════════════════════════════════════════
@@ -1486,8 +1487,7 @@ async function handleSearch(message) {
     return message.channel.send({ embeds: [
       new EmbedBuilder().setColor('#FFA500')
         .setTitle('🔍 بحث في التريدات')
-        .setDescription('اكتب اسم الشي اللي تبيه:
-`!بحث tralalero`')
+        .setDescription('اكتب اسم الشي اللي تبيه:\n`!بحث tralalero`')
         .setTimestamp()
     ]});
   }
@@ -1549,3 +1549,4 @@ async function handleSearch(message) {
  
 // ══════════════════════════════════════════════════════
 client.login(TOKEN);
+ 
