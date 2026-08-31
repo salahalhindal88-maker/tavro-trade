@@ -1,1602 +1,1131 @@
-// ╔══════════════════════════════════════════════════════════════════╗
-// ║   Steal a Brainrot — Trade Bot  v4.2 (أوامر عربية)            ║
-// ║   ميزات: تريد | طلب شي | عروض متعددة | وسيط | صور | DM        ║
-// ╚══════════════════════════════════════════════════════════════════╝
+require('dotenv').config();
+const { Client, GatewayIntentBits, EmbedBuilder, ButtonBuilder, ButtonStyle, ActionRowBuilder } = require('discord.js');
+const Database = require('better-sqlite3');
 
-const {
-  Client, GatewayIntentBits, EmbedBuilder,
-  ActionRowBuilder, ButtonBuilder, ButtonStyle,
-  ModalBuilder, TextInputBuilder, TextInputStyle,
-  ChannelType, PermissionFlagsBits, Events
-} = require('discord.js');
+// ==============================
+// الإعدادات
+// ==============================
+const CONFIG = {
+  ECONOMY_CHANNEL_ID: '1544072704972427274',
+  LOG_CHANNEL_ID: '',
+  OWNER_ID: '717481322683301940',
+  EXTRA_OWNERS: ['1412021840133492857', '1027626650655019048'],
+};
 
-const client = new Client({
-  intents: [
-    GatewayIntentBits.Guilds,
-    GatewayIntentBits.GuildMessages,
-    GatewayIntentBits.MessageContent,
-    GatewayIntentBits.GuildMembers,
-  ]
+// ==============================
+// قاعدة البيانات
+// ==============================
+const db = new Database('empire.db');
+db.exec(`
+  CREATE TABLE IF NOT EXISTS users (
+    id TEXT PRIMARY KEY, username TEXT,
+    cash INTEGER DEFAULT 5000, bank INTEGER DEFAULT 0,
+    loan INTEGER DEFAULT 0, loan_due INTEGER DEFAULT 0,
+    credit_score INTEGER DEFAULT 100, protection_until INTEGER DEFAULT 0,
+    career TEXT DEFAULT NULL, career_level INTEGER DEFAULT 1,
+    last_work INTEGER DEFAULT 0, last_invest INTEGER DEFAULT 0,
+    last_sabotage INTEGER DEFAULT 0, last_transfer INTEGER DEFAULT 0,
+    last_loan INTEGER DEFAULT 0, last_lootbox INTEGER DEFAULT 0,
+    last_contract INTEGER DEFAULT 0
+  );
+  CREATE TABLE IF NOT EXISTS treasury (id INTEGER PRIMARY KEY DEFAULT 1, amount INTEGER DEFAULT 0);
+  CREATE TABLE IF NOT EXISTS companies (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    owner_id TEXT, company_id TEXT, level INTEGER DEFAULT 1,
+    current_value INTEGER, last_collected INTEGER DEFAULT (unixepoch()*1000)
+  );
+  CREATE TABLE IF NOT EXISTS resources (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    owner_id TEXT, name TEXT, quantity INTEGER DEFAULT 0
+  );
+  CREATE TABLE IF NOT EXISTS stocks (
+    symbol TEXT PRIMARY KEY, company_name TEXT,
+    price INTEGER, total_shares INTEGER DEFAULT 100000
+  );
+  CREATE TABLE IF NOT EXISTS user_stocks (
+    owner_id TEXT, symbol TEXT, shares INTEGER DEFAULT 0,
+    PRIMARY KEY (owner_id, symbol)
+  );
+  CREATE TABLE IF NOT EXISTS alliances (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT UNIQUE, leader_id TEXT,
+    member2_id TEXT DEFAULT NULL, member3_id TEXT DEFAULT NULL,
+    treasury INTEGER DEFAULT 0, wins INTEGER DEFAULT 0
+  );
+  CREATE TABLE IF NOT EXISTS markets (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT UNIQUE, income_per_hour INTEGER,
+    controlled_by INTEGER DEFAULT NULL
+  );
+  CREATE TABLE IF NOT EXISTS sabotage_log (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    saboteur_id TEXT, victim_id TEXT, amount INTEGER, at INTEGER DEFAULT (unixepoch())
+  );
+  CREATE TABLE IF NOT EXISTS lawsuits (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    plaintiff_id TEXT, defendant_id TEXT, claimed_amount INTEGER,
+    status TEXT DEFAULT 'open', verdict TEXT, created_at INTEGER DEFAULT (unixepoch())
+  );
+  CREATE TABLE IF NOT EXISTS contracts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id TEXT, amount INTEGER, field TEXT, result TEXT, profit INTEGER,
+    started_at INTEGER, ends_at INTEGER, notified INTEGER DEFAULT 0
+  );
+  CREATE TABLE IF NOT EXISTS reward_boxes (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id TEXT, box_type TEXT, prize TEXT, prize_value INTEGER, opened_at INTEGER DEFAULT (unixepoch())
+  );
+  INSERT OR IGNORE INTO treasury (id, amount) VALUES (1, 0);
+`);
+
+// تهيئة الأسهم الافتراضية
+const DEFAULT_STOCKS = [
+  { symbol: 'TAQA', name: '⚡ شركة الطاقة المتحدة', price: 500 },
+  { symbol: 'BNK',  name: '🏦 بنك الخليج المالي',   price: 800 },
+  { symbol: 'TECH', name: '💻 تقنية المستقبل',       price: 350 },
+  { symbol: 'FOOD', name: '🍔 أغذية الوطن',          price: 200 },
+  { symbol: 'GOLD', name: '🥇 مناجم الذهب العالمية', price: 1200 },
+];
+for (const s of DEFAULT_STOCKS) {
+  db.prepare('INSERT OR IGNORE INTO stocks (symbol, company_name, price) VALUES (?,?,?)').run(s.symbol, s.name, s.price);
+}
+
+// تهيئة الأسواق الافتراضية (لحروب التحالفات)
+const DEFAULT_MARKETS = [
+  { name: '🏭 المنطقة الصناعية', income: 5000 },
+  { name: '🏦 الحي المالي',      income: 8000 },
+  { name: '🚢 ميناء التجارة',    income: 6500 },
+  { name: '🎪 السوق المركزي',    income: 4000 },
+  { name: '🏰 وسط المدينة',      income: 10000 },
+];
+for (const m of DEFAULT_MARKETS) {
+  db.prepare('INSERT OR IGNORE INTO markets (name, income_per_hour) VALUES (?,?)').run(m.name, m.income);
+}
+
+// ==============================
+// المهن (الوظائف الحقيقية)
+// ==============================
+const CAREERS = {
+  'طبيب':    { emoji: '⚕️', baseSalary: 8000,  minLevel: 4, desc: 'راتب عالي، يتطلب ثروة كبيرة للبدء' },
+  'مهندس':   { emoji: '👷', baseSalary: 6000,  minLevel: 3, desc: 'راتب جيد ومستقر' },
+  'مبرمج':   { emoji: '💻', baseSalary: 5500,  minLevel: 2, desc: 'دخل جيد بمستوى دخول متوسط' },
+  'محامي':   { emoji: '⚖️', baseSalary: 7000,  minLevel: 4, desc: 'راتب مرتفع + يقلل رسوم الدعاوى' },
+  'تاجر':    { emoji: '📦', baseSalary: 4000,  minLevel: 1, desc: 'راتب متوسط + يزيد أرباح البيع' },
+  'عامل':    { emoji: '🔨', baseSalary: 2000,  minLevel: 1, desc: 'وظيفة بداية، متاحة للجميع' },
+};
+
+// ==============================
+// الشركات (بديل الأراضي)
+// ==============================
+const COMPANIES_LIST = [
+  { id: 'c1', name: '☕ مقهى صغير',        sector: 'خدمي',  price: 100_000 },
+  { id: 'c2', name: '🏪 متجر بقالة',       sector: 'تجاري', price: 200_000 },
+  { id: 'c3', name: '🍕 مطعم',             sector: 'خدمي',  price: 350_000 },
+  { id: 'c4', name: '🏋️ نادي رياضي',       sector: 'خدمي',  price: 500_000 },
+  { id: 'c5', name: '🏬 مركز تسوق صغير',   sector: 'تجاري', price: 700_000 },
+  { id: 'c6', name: '⚙️ مصنع إنتاج',       sector: 'صناعي', price: 900_000 },
+  { id: 'c7', name: '🏢 مبنى مكاتب',       sector: 'تجاري', price: 1_200_000 },
+  { id: 'c8', name: '🏭 مجمع صناعي',       sector: 'صناعي', price: 1_500_000 },
+  { id: 'c9', name: '🌐 شركة تقنية',       sector: 'تقني',  price: 1_750_000 },
+  { id: 'c10', name: '👑 برج أعمال',       sector: 'تجاري', price: 2_000_000 },
+];
+
+// ==============================
+// الموارد وسلسلة الإنتاج
+// ==============================
+const RAW_RESOURCES = {
+  خشب:   { price: 5,   emoji: '🪵' },
+  حديد:  { price: 5,   emoji: '🔩' },
+  قماش:  { price: 8,   emoji: '🧵' },
+  بلاستيك: { price: 12, emoji: '🧴' },
+  نحاس:  { price: 40,  emoji: '🟤' },
+  ذهب:   { price: 176, emoji: '🟡' },
+};
+
+// المنتجات الوسيطة (مصنّعة من الخام)
+const COMPONENTS = {
+  'ألواح خشبية': { emoji: '📐', requires: { خشب: 10 }, price: 80 },
+  'قطع معدنية':  { emoji: '⚙️', requires: { حديد: 8, نحاس: 2 }, price: 120 },
+  'أقمشة فاخرة': { emoji: '🧶', requires: { قماش: 15 }, price: 150 },
+};
+
+// المنتجات النهائية (تُباع بأعلى سعر)
+const PRODUCTS = {
+  'أثاث فاخر':  { emoji: '🛋️', requires: { 'ألواح خشبية': 5, 'أقمشة فاخرة': 3 }, sellPrice: 1500 },
+  'أجهزة إلكترونية': { emoji: '📱', requires: { 'قطع معدنية': 6, بلاستيك: 10 }, sellPrice: 2200 },
+  'مجوهرات':    { emoji: '💍', requires: { ذهب: 20, 'قطع معدنية': 4 }, sellPrice: 4500 },
+};
+
+const LEVEL_MULTIPLIERS = [1, 1.5, 2.3, 3.4, 5.0, 7.2, 10.5, 15.0, 22.0, 32.0];
+const COMPANY_INCOME_RATE = 0.015; // 1.5% من قيمة الشركة كل دقيقة
+
+const COMPANY_UPGRADE_REQ = [
+  { خشب: 150, حديد: 100, قماش: 80,  بلاستيك: 60,  نحاس: 0,   ذهب: 0   },
+  { خشب: 400, حديد: 300, قماش: 250, بلاستيك: 180, نحاس: 30,  ذهب: 0   },
+  { خشب: 700, حديد: 550, قماش: 450, بلاستيك: 350, نحاس: 150, ذهب: 100 },
+  { خشب: 1200,حديد: 950, قماش: 800, بلاستيك: 650, نحاس: 350, ذهب: 250 },
+  { خشب: 2000,حديد: 1600,قماش: 1400,بلاستيك: 1100,نحاس: 700, ذهب: 500 },
+  { خشب: 3200,حديد: 2700,قماش: 2300,بلاستيك: 1900,نحاس: 1300,ذهب: 900 },
+  { خشب: 5000,حديد: 4300,قماش: 3700,بلاستيك: 3100,نحاس: 2200,ذهب: 1600},
+  { خشب: 7500,حديد: 6500,قماش: 5700,بلاستيك: 4800,نحاس: 3500,ذهب: 2600},
+  { خشب:11000,حديد:9800, قماش: 8600,بلاستيك: 7300,نحاس: 5500,ذهب: 4200},
+];
+
+// ==============================
+// العقود المؤقتة (بديل الرحلات)
+// ==============================
+const CONTRACT_FIELDS = [
+  { name: '💊 عقد طبي',        risk: 'متوسط', bonus: 1.0,  desc: 'مشروع صحي متوسط المخاطر' },
+  { name: '🏗️ عقد إنشائي',      risk: 'عالي',  bonus: 1.3,  desc: 'مشروع بناء بمخاطر أعلى وعائد أكبر' },
+  { name: '💻 عقد برمجي',       risk: 'منخفض', bonus: 0.85, desc: 'مشروع تقني آمن نسبياً' },
+  { name: '📈 عقد استشاري',     risk: 'منخفض', bonus: 0.9,  desc: 'استشارات أعمال منخفضة المخاطر' },
+  { name: '🚀 مشروع ناشئ',      risk: 'خطر',   bonus: 2.0,  desc: 'استثمار في شركة ناشئة، مخاطرة عالية جداً' },
+  { name: '🏭 عقد صناعي',       risk: 'عالي',  bonus: 1.4,  desc: 'مشروع صناعي كبير بمخاطر عالية' },
+];
+
+// ==============================
+// صناديق المكافآت
+// ==============================
+const REWARD_BOXES = {
+  عادي: {
+    price: 5_000, emoji: '📦', color: '#95a5a6',
+    prizes: [
+      { name: 'مكافأة صغيرة',  type: 'money', value: 2_000,  chance: 40 },
+      { name: 'مكافأة متوسطة', type: 'money', value: 4_000,  chance: 25 },
+      { name: 'مكافأة جيدة',   type: 'money', value: 10_000, chance: 18 },
+      { name: 'حماية 6س',      type: 'protection', value: 6,  chance: 10 },
+      { name: 'مكافأة كبيرة',  type: 'money', value: 30_000, chance: 5  },
+      { name: 'مكافأة نادرة',  type: 'money', value: 80_000, chance: 2  },
+    ]
+  },
+  فضي: {
+    price: 25_000, emoji: '🥈', color: '#bdc3c7',
+    prizes: [
+      { name: 'مكافأة قليلة',   type: 'money', value: 10_000,  chance: 39 },
+      { name: 'مكافأة جيدة',    type: 'money', value: 30_000,  chance: 27 },
+      { name: 'حماية 24س',      type: 'protection', value: 24, chance: 20 },
+      { name: 'مكافأة كبيرة',   type: 'money', value: 80_000,  chance: 15 },
+      { name: 'مكافأة نادرة',   type: 'money', value: 200_000, chance: 10 },
+      { name: 'مكافأة أسطورية', type: 'money', value: 750_000, chance: 7  },
+    ]
+  },
+  ذهبي: {
+    price: 500_000, emoji: '🥇', color: '#f1c40f',
+    prizes: [
+      { name: 'مكافأة متوسطة',  type: 'money', value: 100_000,  chance: 30 },
+      { name: 'مكافأة كبيرة',   type: 'money', value: 200_000,  chance: 25 },
+      { name: 'حماية 72س',      type: 'protection', value: 72,  chance: 20 },
+      { name: 'مكافأة نادرة',   type: 'money', value: 600_000,  chance: 15 },
+      { name: 'مكافأة أسطورية', type: 'money', value: 2_000_000,chance: 7  },
+      { name: 'الجائزة الكبرى', type: 'money', value: 5_000_000,chance: 3  },
+    ]
+  },
+};
+
+const TRANSFER_COOLDOWN = 20 * 60 * 1000;
+const COOLDOWNS = { عمل: 60*60*1000, استثمر: 3*60*1000, تخريب: 15*60*1000 };
+
+// ==============================
+// دوال مساعدة
+// ==============================
+function fmt(n) {
+  if (n >= 1_000_000_000_000) return (n/1_000_000_000_000).toFixed(1)+'T 💰';
+  if (n >= 1_000_000_000)     return (n/1_000_000_000).toFixed(1)+'B 💰';
+  if (n >= 1_000_000)         return (n/1_000_000).toFixed(1)+'M 💰';
+  if (n >= 1_000)             return (n/1_000).toFixed(1)+'K 💰';
+  return n.toLocaleString('ar')+' 💰';
+}
+
+function parseAmount(str, fallback = null) {
+  if (!str) return NaN;
+  const s = str.toLowerCase().trim();
+  if (s==='كل'||s==='all')            return fallback ?? NaN;
+  if (s==='نص'||s==='نصف')            return fallback!==null ? Math.floor(fallback/2)   : NaN;
+  if (s==='ربع')                       return fallback!==null ? Math.floor(fallback/4)   : NaN;
+  if (s==='ثلث')                       return fallback!==null ? Math.floor(fallback/3)   : NaN;
+  const mults = { 'k':1_000,'m':1_000_000,'b':1_000_000_000,'t':1_000_000_000_000 };
+  for (const [suf,m] of Object.entries(mults)) {
+    if (s.endsWith(suf)) { const n=parseFloat(s.slice(0,-suf.length)); if(!isNaN(n)) return Math.floor(n*m); }
+  }
+  return parseInt(s);
+}
+
+function fmtTime(ms) {
+  if (ms<=0) return '✅ جاهز';
+  const h=Math.floor(ms/3600000),m=Math.floor((ms%3600000)/60000),s=Math.floor((ms%60000)/1000);
+  if(h>0) return `${h}س ${m}د ${s}ث`; if(m>0) return `${m}د ${s}ث`; return `${s}ث`;
+}
+
+function getUser(id, username='') {
+  let u = db.prepare('SELECT * FROM users WHERE id=?').get(id);
+  if (!u) { db.prepare('INSERT OR IGNORE INTO users (id,username) VALUES (?,?)').run(id,username); u=db.prepare('SELECT * FROM users WHERE id=?').get(id); }
+  return u;
+}
+
+function cooldownLeft(user, cmd) {
+  const fm = { عمل:'last_work', استثمر:'last_invest', تخريب:'last_sabotage' };
+  const f = fm[cmd]; if(!f) return 0;
+  return Math.max(0, COOLDOWNS[cmd]-(Date.now()-(user[f]||0)));
+}
+
+function getCompanyValue(company) {
+  const base = COMPANIES_LIST.find(c=>c.id===company.company_id)?.price || 0;
+  return Math.floor(base * (LEVEL_MULTIPLIERS[company.level-1] || 1));
+}
+
+function getResource(userId, name) {
+  return db.prepare('SELECT * FROM resources WHERE owner_id=? AND name=?').get(userId, name);
+}
+
+function addResource(userId, name, qty) {
+  const existing = getResource(userId, name);
+  if (existing) db.prepare('UPDATE resources SET quantity=quantity+? WHERE owner_id=? AND name=?').run(qty, userId, name);
+  else db.prepare('INSERT INTO resources (owner_id,name,quantity) VALUES (?,?,?)').run(userId, name, qty);
+}
+
+function removeResource(userId, name, qty) {
+  db.prepare('UPDATE resources SET quantity=quantity-? WHERE owner_id=? AND name=?').run(qty, userId, name);
+}
+
+function hasEnoughResources(userId, requirements) {
+  for (const [name, needed] of Object.entries(requirements)) {
+    if (needed === 0) continue;
+    const have = getResource(userId, name);
+    if (!have || have.quantity < needed) return false;
+  }
+  return true;
+}
+
+function rollPrize(prizes) {
+  const total = prizes.reduce((s,p)=>s+p.chance,0);
+  let r = Math.random()*total, cum=0;
+  for(const p of prizes){ cum+=p.chance; if(r<=cum) return p; }
+  return prizes[prizes.length-1];
+}
+
+const client = new Client({intents:[GatewayIntentBits.Guilds,GatewayIntentBits.GuildMessages,GatewayIntentBits.MessageContent,GatewayIntentBits.GuildMembers]});
+client.once('ready', () => {
+  console.log(`✅ إمبراطورية الأعمال شغالة: ${client.user.tag}`);
+  startPassiveIncomeSystem();
+  startStockDriftSystem();
 });
 
-// ══════════════════════════════════════════════════════
-//  ⚙️  إعدادات — حطها في Railway كـ Environment Variables
-// ══════════════════════════════════════════════════════
-const TOKEN                    = process.env.TOKEN                    || 'YOUR_BOT_TOKEN';
-const TRADE_CHANNEL_ID         = process.env.TRADE_CHANNEL_ID         || '1480361973538361344';
-const REQUEST_CHANNEL_ID       = process.env.REQUEST_CHANNEL_ID       || '1480361973538361344';
-const MM_ROLE_ID               = process.env.MM_ROLE_ID               || '1451449214906273953';
-const MM_CATEGORY_ID           = process.env.MM_CATEGORY_ID           || '1477883142604853522';
-const IMAGE_STORAGE_CHANNEL_ID = process.env.IMAGE_STORAGE_CHANNEL_ID || '1480489127643447338';
-
-// ══════════════════════════════════════════════════════
-//  💾  التخزين في الذاكرة
-// ══════════════════════════════════════════════════════
-const activeTrades        = new Map();
-const activeRequests      = new Map();
-const activeTickets       = new Map();
-const pendingImageUploads = new Map();
-const userReputations     = new Map(); // userId → { total, count, history[] }
-const pendingRatings      = new Map(); // userId → { targetId, targetName, tradeDesc }
-
-// ══════════════════════════════════════════════════════
-//  ✅  جاهز
-// ══════════════════════════════════════════════════════
-client.once(Events.ClientReady, () => {
-  console.log(`✅ البوت شغال: ${client.user.tag}`);
-  client.user.setActivity('🔄 Steal a Brainrot Trades', { type: 3 });
-});
-
-// ══════════════════════════════════════════════════════
-//  📨  الأوامر + التقاط الصور
-// ══════════════════════════════════════════════════════
-client.on(Events.MessageCreate, async (message) => {
-  if (message.author.bot) return;
-  console.log(`🔔 MESSAGE: ${message.author.username} | "${message.content}" | pending: ${pendingImageUploads.has(message.author.id)}`);
-
-  if (pendingImageUploads.has(message.author.id)) {
-    console.log(`📨 pending found for ${message.author.username} | content: "${message.content}" | attachments: ${message.attachments.size}`);
-    const p = pendingImageUploads.get(message.author.id);
-    console.log(`📋 pending step: ${p.step}`);
-    const handlers = {
-      seller_image:   () => handleSellerImageUpload(message, p),
-      offer_image:    () => handleOfferImageUpload(message, p),
-      request_image:  () => handleRequestImageUpload(message, p),
-      supplier_image: () => handleSupplierImageUpload(message, p),
-    };
-    if (handlers[p.step]) { await handlers[p.step](); return; }
-  }
-
-  if (!message.content.startsWith('!')) return;
-  const cmd = message.content.slice(1).trim().split(/ +/)[0];
-
-  const cmds = {
-    'تريد':    () => sendMainMenu(message),
-    'طلب':     () => sendRequestForm(message),
-    'تريداتي': () => handleMyTradesMessage(message),
-    'طلباتي':  () => handleMyRequestsMessage(message),
-    'مساعدة':  () => handleHelp(message),
-    'بحث':     () => handleSearch(message),
-  };
-
-  if (cmds[cmd]) {
-    try { await message.delete(); } catch {}
-    await cmds[cmd]();
-  }
-});
-
-// ══════════════════════════════════════════════════════
-//  🏠  القائمة الرئيسية
-// ══════════════════════════════════════════════════════
-async function sendMainMenu(message) {
-  const embed = new EmbedBuilder()
-    .setColor('#FF6B35')
-    .setTitle('🎮 Steal a Brainrot — مركز التريد')
-    .setDescription('اختار نوع العملية اللي تبيها:')
-    .addFields(
-      { name: '🔄 تريد — عندي شي وأبي أبادله',   value: '> عندك Brainrot وتبي تبادله بشي ثاني',      inline: false },
-      { name: '🛒 طلب — أبي شي ومعي ما يقابله',   value: '> تبي Brainrot معين وعندك شي تعرضه مقابله', inline: false }
-    )
-    .setThumbnail(message.author.displayAvatarURL({ dynamic: true }))
-    .setFooter({ text: 'Steal a Brainrot Trading Bot', iconURL: client.user.displayAvatarURL() })
-    .setTimestamp();
-
-  await message.channel.send({
-    embeds: [embed],
-    components: [new ActionRowBuilder().addComponents(
-      mkBtn(`create_trade_${message.author.id}`,   '🔄 إنشاء تريد', ButtonStyle.Primary),
-      mkBtn(`create_request_${message.author.id}`, '🛒 إنشاء طلب',  ButtonStyle.Success),
-      mkBtn('view_all',                            '📊 عرض الكل',   ButtonStyle.Secondary)
-    )]
-  });
-}
-
-// ══════════════════════════════════════════════════════
-//  🛒  نموذج الطلب
-// ══════════════════════════════════════════════════════
-async function sendRequestForm(message) {
-  await message.channel.send({
-    embeds: [new EmbedBuilder()
-      .setColor('#00B4D8')
-      .setTitle('🛒 طلب شي — Steal a Brainrot')
-      .setDescription(
-        '**خطوتين:**\n' +
-        '1️⃣ اضغط **"إنشاء طلب"** وأدخل المعلومات\n' +
-        '2️⃣ أرسل **صورة** للشي اللي تبيه (أو اكتب `skip`)\n\n' +
-        '> اللي عنده الشي يرد عليك بعرضه'
-      )
-      .setThumbnail(message.author.displayAvatarURL({ dynamic: true }))
-      .setFooter({ text: 'Steal a Brainrot Trading Bot', iconURL: client.user.displayAvatarURL() })
-      .setTimestamp()
-    ],
-    components: [new ActionRowBuilder().addComponents(
-      mkBtn(`create_request_${message.author.id}`, '🛒 إنشاء طلب', ButtonStyle.Success),
-      mkBtn('view_requests',                        '📋 الطلبات',   ButtonStyle.Secondary)
-    )]
-  });
-}
-
-// ══════════════════════════════════════════════════════
-//  📋  !تريداتي — تريداتك أنت فقط (أمر نصي)
-// ══════════════════════════════════════════════════════
-async function handleMyTradesMessage(message) {
-  const userId   = message.author.id;
-  const myTrades = [...activeTrades.entries()].filter(([, t]) => t.userId === userId && !t.locked);
-
-  if (myTrades.length === 0) {
-    return message.channel.send({ embeds: [
-      new EmbedBuilder().setColor('#FFA500')
-        .setTitle('📋 تريداتي')
-        .setDescription(`ما عندك تريدات نشطة يا <@${userId}>!\nاستخدم \`!تريد\` لإنشاء تريد جديد.`)
-        .setTimestamp()
-    ]});
-  }
-
-  const embeds = [];
-  const rows   = [];
-  let i = 0;
-
-  for (const [tradeId, trade] of myTrades) {
-    if (i >= 5) break;
-    const e = new EmbedBuilder()
-      .setColor('#FF6B35')
-      .setTitle(`${i + 1}. 🎁 ${trade.offerItem}`)
-      .addFields(
-        { name: '💰 يبي',         value: trade.wantItem,             inline: true },
-        { name: '💵 دخله/ثانية', value: trade.income,               inline: true },
-        { name: '💬 العروض',      value: `${trade.offers.size} عرض`, inline: true },
-        { name: '⬆️ تطويراته',   value: trade.upgrades,             inline: true },
-        { name: '📝 ملاحظات',     value: trade.notes,                inline: true }
-      )
-      .setTimestamp(trade.timestamp);
-    if (trade.imageUrl) e.setThumbnail(trade.imageUrl);
-    embeds.push(e);
-
-    rows.push(new ActionRowBuilder().addComponents(
-      mkBtn(`myrepost_trade_${tradeId}`,    `🔄 إعادة نشر ${i + 1}`, ButtonStyle.Success),
-      mkBtn(`view_offers_trade_${tradeId}`, `👁️ عروض ${i + 1}`,      ButtonStyle.Secondary),
-      mkBtn(`delete_trade_${tradeId}`,      `🗑️ حذف ${i + 1}`,       ButtonStyle.Danger)
-    ));
-    i++;
-  }
-
-  const header = new EmbedBuilder()
-    .setColor('#FF6B35')
-    .setTitle(`📋 تريداتي — ${myTrades.length} تريد نشط`)
-    .setDescription(
-      `هذي تريداتك يا <@${userId}> اللي لم تُغلق بعد:\n` +
-      '• 🔄 **إعادة نشر** — يعيد نشر التريد بدون ما تكتب من جديد\n' +
-      '• 👁️ **عروض** — تشوف كل العروض وتقبل أو ترفض\n' +
-      '• 🗑️ **حذف** — تحذف التريد نهائياً'
-    )
-    .setTimestamp();
-
-  await message.channel.send({ embeds: [header, ...embeds], components: rows });
-}
-
-// ══════════════════════════════════════════════════════
-//  📋  !طلباتي — طلباتك أنت فقط (أمر نصي)
-// ══════════════════════════════════════════════════════
-async function handleMyRequestsMessage(message) {
-  const userId     = message.author.id;
-  const myRequests = [...activeRequests.entries()].filter(([, r]) => r.userId === userId && !r.locked);
-
-  if (myRequests.length === 0) {
-    return message.channel.send({ embeds: [
-      new EmbedBuilder().setColor('#FFA500')
-        .setTitle('📋 طلباتي')
-        .setDescription(`ما عندك طلبات نشطة يا <@${userId}>!\nاستخدم \`!طلب\` لإنشاء طلب جديد.`)
-        .setTimestamp()
-    ]});
-  }
-
-  const embeds = [];
-  const rows   = [];
-  let i = 0;
-
-  for (const [requestId, req] of myRequests) {
-    if (i >= 5) break;
-    const e = new EmbedBuilder()
-      .setColor('#00B4D8')
-      .setTitle(`${i + 1}. 🎯 يطلب: ${req.wantItem}`)
-      .addFields(
-        { name: '🎁 مقابله',      value: req.offerItem,              inline: true },
-        { name: '💵 دخله/ثانية', value: req.offerIncome,            inline: true },
-        { name: '💬 العروض',      value: `${req.offers.size} عرض`,   inline: true },
-        { name: '📋 تفاصيل',      value: req.wantDetails,            inline: true },
-        { name: '📝 ملاحظات',     value: req.notes,                  inline: true }
-      )
-      .setTimestamp(req.timestamp);
-    if (req.imageUrl) e.setThumbnail(req.imageUrl);
-    embeds.push(e);
-
-    rows.push(new ActionRowBuilder().addComponents(
-      mkBtn(`myrepost_request_${requestId}`,    `🔄 إعادة نشر ${i + 1}`, ButtonStyle.Success),
-      mkBtn(`view_offers_request_${requestId}`, `👁️ عروض ${i + 1}`,      ButtonStyle.Secondary),
-      mkBtn(`delete_request_${requestId}`,      `🗑️ حذف ${i + 1}`,       ButtonStyle.Danger)
-    ));
-    i++;
-  }
-
-  const header = new EmbedBuilder()
-    .setColor('#00B4D8')
-    .setTitle(`📋 طلباتي — ${myRequests.length} طلب نشط`)
-    .setDescription(
-      `هذي طلباتك يا <@${userId}> اللي لم تُغلق بعد:\n` +
-      '• 🔄 **إعادة نشر** — يعيد نشر الطلب بدون ما تكتب من جديد\n' +
-      '• 👁️ **عروض** — تشوف كل العروض وتقبل أو ترفض\n' +
-      '• 🗑️ **حذف** — تحذف الطلب نهائياً'
-    )
-    .setTimestamp();
-
-  await message.channel.send({ embeds: [header, ...embeds], components: rows });
-}
-
-// ══════════════════════════════════════════════════════
-//  🎛️  كل الـ Interactions
-// ══════════════════════════════════════════════════════
-client.on(Events.InteractionCreate, async (interaction) => {
-
-  if (interaction.isButton()) {
-    const id = interaction.customId;
-
-    // ── أزرار التقييم (تأتي في DM) ──
-    if (id.startsWith('rate_')) return handleRatingButton(interaction);
-
-    if (id.startsWith('create_trade_'))   return interaction.showModal(buildTradeModal(interaction.user.id));
-    if (id.startsWith('create_request_')) return interaction.showModal(buildRequestModal(interaction.user.id));
-
-    if (id === 'view_all')      return showAllInteraction(interaction);
-    if (id === 'view_requests') return handleViewRequestsInteraction(interaction);
-    if (id === 'view_trades')   return handleViewTradesInteraction(interaction);
-    if (id === 'my_trades')     return showMyTrades(interaction);
-    if (id === 'my_requests')   return showMyRequests(interaction);
-
-    // ── إعادة نشر تريد (من المنشور أو من تريداتي) ──
-    if (id.startsWith('repost_trade_') || id.startsWith('myrepost_trade_')) {
-      const tradeId = id.startsWith('myrepost_trade_')
-        ? id.replace('myrepost_trade_', '')
-        : id.replace('repost_trade_', '');
-      const trade = activeTrades.get(tradeId);
-      if (!trade)
-        return interaction.reply({ content: '❌ التريد غير موجود!', ephemeral: true });
-      if (interaction.user.id !== trade.userId)
-        return interaction.reply({ content: '❌ هذا مو تريدك!', ephemeral: true });
-      if (trade.locked)
-        return interaction.reply({ content: '❌ التريد مغلق!', ephemeral: true });
-      await interaction.reply({ content: '🔄 جاري إعادة النشر...', ephemeral: true });
-      trade.offers = new Map();
-      activeTrades.set(tradeId, trade);
-      await repostTrade(interaction, trade, tradeId);
-      return;
-    }
-
-    // ── إعادة نشر طلب (من المنشور أو من طلباتي) ──
-    if (id.startsWith('repost_request_') || id.startsWith('myrepost_request_')) {
-      const requestId = id.startsWith('myrepost_request_')
-        ? id.replace('myrepost_request_', '')
-        : id.replace('repost_request_', '');
-      const req = activeRequests.get(requestId);
-      if (!req)
-        return interaction.reply({ content: '❌ الطلب غير موجود!', ephemeral: true });
-      if (interaction.user.id !== req.userId)
-        return interaction.reply({ content: '❌ هذا مو طلبك!', ephemeral: true });
-      if (req.locked)
-        return interaction.reply({ content: '❌ الطلب مغلق!', ephemeral: true });
-      await interaction.reply({ content: '🔄 جاري إعادة النشر...', ephemeral: true });
-      req.offers = new Map();
-      activeRequests.set(requestId, req);
-      await repostRequest(interaction, req, requestId);
-      return;
-    }
-
-    // ── تقديم عرض على تريد ──
-    if (id.startsWith('make_offer_')) {
-      const tradeId = id.replace('make_offer_', '');
-      const trade   = activeTrades.get(tradeId);
-      if (!trade)
-        return interaction.reply({ content: '❌ التريد غير موجود!', ephemeral: true });
-      if (trade.locked)
-        return interaction.reply({ content: '❌ هذا التريد مغلق!', ephemeral: true });
-      if (interaction.user.id === trade.userId)
-        return interaction.reply({ content: '❌ ما تقدر تقدم عرض على تريدك!', ephemeral: true });
-      for (const [, o] of trade.offers)
-        if (o.userId === interaction.user.id)
-          return interaction.reply({ content: '❌ قدمت عرض مسبقاً!', ephemeral: true });
-      return interaction.showModal(buildOfferModal(tradeId, 'trade'));
-    }
-
-    // ── تقديم عرض على طلب ──
-    if (id.startsWith('fulfill_request_')) {
-      const requestId = id.replace('fulfill_request_', '');
-      const req       = activeRequests.get(requestId);
-      if (!req)
-        return interaction.reply({ content: '❌ الطلب غير موجود!', ephemeral: true });
-      if (req.locked)
-        return interaction.reply({ content: '❌ هذا الطلب مغلق!', ephemeral: true });
-      if (interaction.user.id === req.userId)
-        return interaction.reply({ content: '❌ ما تقدر تقدم عرض على طلبك!', ephemeral: true });
-      for (const [, o] of req.offers)
-        if (o.userId === interaction.user.id)
-          return interaction.reply({ content: '❌ قدمت عرض مسبقاً!', ephemeral: true });
-      return interaction.showModal(buildOfferModal(requestId, 'request'));
-    }
-
-    // ── عرض العروض ──
-    if (id.startsWith('view_offers_')) {
-      const withoutPrefix = id.replace('view_offers_', '');
-      const pType  = withoutPrefix.startsWith('request_') ? 'request' : 'trade';
-      const postId = withoutPrefix.replace(`${pType}_`, '');
-      const post   = pType === 'trade' ? activeTrades.get(postId) : activeRequests.get(postId);
-      if (!post)
-        return interaction.reply({ content: '❌ المنشور غير موجود!', ephemeral: true });
-      if (interaction.user.id !== post.userId)
-        return interaction.reply({ content: '❌ فقط صاحب المنشور يشوف العروض!', ephemeral: true });
-      return showOffersToOwner(interaction, post, postId, pType);
-    }
-
-    // ── قبول عرض ──
-    if (id.startsWith('accept_offer_')) {
-      const parts   = id.replace('accept_offer_', '').split('__');
-      const postId  = parts[0], offerId = parts[1], pType = parts[2];
-      const post    = pType === 'trade' ? activeTrades.get(postId) : activeRequests.get(postId);
-
-      if (!post)
-        return interaction.reply({ content: '❌ المنشور غير موجود!', ephemeral: true });
-      if (interaction.user.id !== post.userId)
-        return interaction.reply({ content: '❌ فقط صاحب المنشور يقبل!', ephemeral: true });
-      if (post.locked)
-        return interaction.reply({ content: '❌ قبلت عرضاً بالفعل!', ephemeral: true });
-
-      const offer = post.offers.get(offerId);
-      if (!offer)
-        return interaction.reply({ content: '❌ العرض غير موجود!', ephemeral: true });
-
-      post.locked = true;
-      if (pType === 'trade') activeTrades.set(postId, post);
-      else activeRequests.set(postId, post);
-
-      await interaction.reply({ embeds: [
-        new EmbedBuilder().setColor('#00FF7F').setTitle('✅ قبلت العرض!')
-          .setDescription(`تم قبول عرض **${offer.username}**!\nجاري فتح تيكيت الوسيط...`).setTimestamp()
-      ], ephemeral: true });
-
-      try {
-        const offerer = await client.users.fetch(offer.userId);
-        await offerer.send({ embeds: [
-          new EmbedBuilder().setColor('#00FF7F').setTitle('🎉 عرضك انقبل!')
-            .setDescription(`**${post.username}** قبل عرضك!`)
-            .addFields(
-              { name: pType === 'trade' ? '🎁 التريد' : '🎯 الطلب', value: pType === 'trade' ? post.offerItem : post.wantItem, inline: true },
-              { name: '🔄 عرضك', value: offer.item, inline: true },
-              { name: '📌 الخطوة التالية', value: 'تم فتح تيكيت وسيط 🔒', inline: false }
-            ).setTimestamp()
-        ]});
-      } catch {}
-
-      const ticketPayload = pType === 'trade' ? {
-        sellerId: post.userId, sellerName: post.username,
-        buyerId: offer.userId, buyerName: offer.username,
-        offerItem: post.offerItem, wantItem: post.wantItem,
-        income: post.income, upgrades: post.upgrades, notes: post.notes,
-        sellerImageUrl: post.imageUrl,
-        buyerItem: offer.item, buyerIncome: offer.income,
-        buyerUpgrades: offer.upgrades, buyerNotes: offer.notes,
-        buyerImageUrl: offer.imageUrl,
-      } : {
-        requesterId: post.userId, requesterName: post.username,
-        supplierId: offer.userId, supplierName: offer.username,
-        wantItem: post.wantItem, wantDetails: post.wantDetails,
-        offerItem: post.offerItem, offerIncome: post.offerIncome,
-        requestImageUrl: post.imageUrl,
-        supplierItem: offer.item, supplierIncome: offer.income,
-        supplierUpgrades: offer.upgrades, supplierNotes: offer.notes,
-        supplierImageUrl: offer.imageUrl,
-      };
-      return createMiddlemanTicket(interaction, ticketPayload, postId, pType);
-    }
-
-    // ── رفض عرض ──
-    if (id.startsWith('reject_offer_')) {
-      const parts   = id.replace('reject_offer_', '').split('__');
-      const postId  = parts[0], offerId = parts[1], pType = parts[2];
-      const post    = pType === 'trade' ? activeTrades.get(postId) : activeRequests.get(postId);
-
-      if (!post || interaction.user.id !== post.userId)
-        return interaction.reply({ content: '❌ غير مصرح!', ephemeral: true });
-
-      const offer = post.offers.get(offerId);
-      if (!offer)
-        return interaction.reply({ content: '❌ العرض غير موجود!', ephemeral: true });
-
-      post.offers.delete(offerId);
-      if (pType === 'trade') activeTrades.set(postId, post);
-      else activeRequests.set(postId, post);
-
-      try {
-        const offerer = await client.users.fetch(offer.userId);
-        await offerer.send({ embeds: [
-          new EmbedBuilder().setColor('#FF6B35').setTitle('❌ عرضك انرفض')
-            .setDescription(`رفض **${post.username}** عرضك.\nتقدر تقدم عروض على تريدات أخرى!`)
-            .addFields({ name: '🔄 عرضك كان', value: offer.item, inline: true }).setTimestamp()
-        ]});
-      } catch {}
-      return interaction.reply({ content: `✅ تم رفض عرض **${offer.username}**.`, ephemeral: true });
-    }
-
-    // ── حذف تريد ──
-    if (id.startsWith('delete_trade_')) {
-      const tradeId = id.replace('delete_trade_', '');
-      const trade   = activeTrades.get(tradeId);
-      if (!trade)
-        return interaction.reply({ content: '❌ التريد مو موجود!', ephemeral: true });
-      if (interaction.user.id !== trade.userId)
-        return interaction.reply({ content: '❌ هذا مو تريدك!', ephemeral: true });
-      activeTrades.delete(tradeId);
-      return interaction.update({ embeds: [
-        new EmbedBuilder().setColor('#FF0000').setTitle('🗑️ تم حذف التريد').setDescription('حذف صاحبه هذا التريد.').setTimestamp()
-      ], components: [] });
-    }
-
-    // ── حذف طلب ──
-    if (id.startsWith('delete_request_')) {
-      const requestId = id.replace('delete_request_', '');
-      const req       = activeRequests.get(requestId);
-      if (!req)
-        return interaction.reply({ content: '❌ الطلب مو موجود!', ephemeral: true });
-      if (interaction.user.id !== req.userId)
-        return interaction.reply({ content: '❌ هذا مو طلبك!', ephemeral: true });
-      activeRequests.delete(requestId);
-      return interaction.update({ embeds: [
-        new EmbedBuilder().setColor('#FF0000').setTitle('🗑️ تم حذف الطلب').setDescription('حذف صاحبه هذا الطلب.').setTimestamp()
-      ], components: [] });
-    }
-
-    // ── أزرار الوسيط ──
-    if (id.startsWith('complete_trade_')) {
-      const td = activeTickets.get(interaction.channel.id);
-      if (!td) return interaction.reply({ content: '❌ ما لقيت بيانات التيكيت!', ephemeral: true });
-      const m = await interaction.guild.members.fetch(interaction.user.id);
-      if (!m.roles.cache.has(MM_ROLE_ID))
-        return interaction.reply({ content: '❌ هذا الزر للوسطاء فقط!', ephemeral: true });
-      return completeTradeTicket(interaction, td);
-    }
-
-    if (id.startsWith('cancel_trade_')) {
-      const td = activeTickets.get(interaction.channel.id);
-      if (!td) return interaction.reply({ content: '❌ ما لقيت بيانات التيكيت!', ephemeral: true });
-      const m = await interaction.guild.members.fetch(interaction.user.id);
-      if (!m.roles.cache.has(MM_ROLE_ID))
-        return interaction.reply({ content: '❌ هذا الزر للوسطاء فقط!', ephemeral: true });
-      return cancelTradeTicket(interaction, td);
-    }
-
-    if (id.startsWith('close_ticket_')) {
-      const m = await interaction.guild.members.fetch(interaction.user.id);
-      if (!m.permissions.has(PermissionFlagsBits.ManageChannels) && !m.roles.cache.has(MM_ROLE_ID))
-        return interaction.reply({ content: '❌ ما عندك صلاحية إغلاق التيكيت!', ephemeral: true });
-      await interaction.reply({ content: '🔒 سيتم الإغلاق خلال 5 ثواني...' });
-      setTimeout(async () => {
-        try { await interaction.channel.delete(); } catch {}
-        activeTickets.delete(interaction.channel.id);
-      }, 5000);
-    }
-  }
-
-  // ══════════════════════════════════════════════════════
-  //  📝  Modal Submits
-  // ══════════════════════════════════════════════════════
-  if (interaction.isModalSubmit()) {
-
-    if (interaction.customId.startsWith('trade_submit_')) {
-      const tradeId = `T-${interaction.user.id}-${Date.now()}`;
-      activeTrades.set(tradeId, {
-        userId:    interaction.user.id,
-        username:  interaction.user.username,
-        userAvatar: interaction.user.displayAvatarURL({ dynamic: true }),
-        offerItem:  interaction.fields.getTextInputValue('offer_item'),
-        wantItem:   interaction.fields.getTextInputValue('want_item'),
-        income:     interaction.fields.getTextInputValue('income'),
-        upgrades:   interaction.fields.getTextInputValue('upgrades'),
-        notes:      interaction.fields.getTextInputValue('notes') || 'لا يوجد',
-        imageUrl: null, locked: false, offers: new Map(),
-        channelId: interaction.channel.id, timestamp: new Date()
-      });
-      pendingImageUploads.set(interaction.user.id, { tradeId, step: 'seller_image', channelId: interaction.channel.id });
-      return interaction.reply({ embeds: [imgRequestEmbed('📸 أرسل صورة الـ Brainrot الذي تعرضه')], ephemeral: true });
-    }
-
-    if (interaction.customId.startsWith('request_submit_')) {
-      const requestId = `R-${interaction.user.id}-${Date.now()}`;
-      activeRequests.set(requestId, {
-        userId:    interaction.user.id,
-        username:  interaction.user.username,
-        userAvatar: interaction.user.displayAvatarURL({ dynamic: true }),
-        wantItem:    interaction.fields.getTextInputValue('want_item'),
-        wantDetails: interaction.fields.getTextInputValue('want_details'),
-        offerItem:   interaction.fields.getTextInputValue('offer_item'),
-        offerIncome: interaction.fields.getTextInputValue('offer_income'),
-        notes:       interaction.fields.getTextInputValue('notes') || 'لا يوجد',
-        imageUrl: null, locked: false, offers: new Map(),
-        channelId: interaction.channel.id, timestamp: new Date()
-      });
-      pendingImageUploads.set(interaction.user.id, { requestId, step: 'request_image', channelId: interaction.channel.id });
-      return interaction.reply({ embeds: [imgRequestEmbed('📸 أرسل صورة الشي الذي تطلبه')], ephemeral: true });
-    }
-
-    if (interaction.customId.startsWith('offer_submit_')) {
-      const rest   = interaction.customId.replace('offer_submit_', '');
-      const pType  = rest.startsWith('request_') ? 'request' : 'trade';
-      const postId = rest.replace(`${pType}_`, '');
-      const post   = pType === 'trade' ? activeTrades.get(postId) : activeRequests.get(postId);
-      if (!post || post.locked)
-        return interaction.reply({ content: '❌ المنشور غير متاح!', ephemeral: true });
-
-      const offerId = `O-${interaction.user.id}-${Date.now()}`;
-      const offerData = {
-        offerId,
-        userId:    interaction.user.id,
-        username:  interaction.user.username,
-        userAvatar: interaction.user.displayAvatarURL({ dynamic: true }),
-        item:      interaction.fields.getTextInputValue('offer_item'),
-        income:    interaction.fields.getTextInputValue('offer_income'),
-        upgrades:  interaction.fields.getTextInputValue('offer_upgrades'),
-        notes:     interaction.fields.getTextInputValue('offer_notes') || 'لا يوجد',
-        imageUrl: null, postId, postType: pType, timestamp: new Date()
-      };
-      post.offers.set(offerId, offerData);
-      if (pType === 'trade') activeTrades.set(postId, post);
-      else activeRequests.set(postId, post);
-
-      pendingImageUploads.set(interaction.user.id, {
-        step: 'offer_image', offerId, postId, postType: pType, channelId: interaction.channel.id
-      });
-      return interaction.reply({ embeds: [imgRequestEmbed('📸 أرسل صورة الشي الذي تعرضه')], ephemeral: true });
-    }
-  }
-});
-
-// ══════════════════════════════════════════════════════
-//  📷  معالجة الصور
-// ══════════════════════════════════════════════════════
-async function handleSellerImageUpload(message, p) {
-  console.log('📸 handleSellerImageUpload - step:', p.step, 'content:', message.content);
-  const trade = activeTrades.get(p.tradeId);
-  if (!trade) {
-    console.log('❌ trade not found:', p.tradeId);
-    pendingImageUploads.delete(message.author.id);
-    return;
-  }
-  const img = await extractImage(message);
-  console.log('📸 img result:', img);
-  if (img === false) return;
-  trade.imageUrl = img || null;
-  activeTrades.set(p.tradeId, trade);
-  pendingImageUploads.delete(message.author.id);
-  console.log('🚀 calling publishTrade...');
-  await publishTrade(message, trade, p.tradeId);
-  console.log('✅ publishTrade done');
-}
-
-async function handleRequestImageUpload(message, p) {
-  const req = activeRequests.get(p.requestId);
-  if (!req) { pendingImageUploads.delete(message.author.id); return; }
-  const img = await extractImage(message);
-  if (img === false) return;
-  req.imageUrl = img || null;
-  activeRequests.set(p.requestId, req);
-  pendingImageUploads.delete(message.author.id);
-  try {
-    const ch = client.channels.cache.get(p.channelId);
-    if (ch) {
-      const fb = await ch.send({ content: `<@${message.author.id}> ⏳ جاري نشر طلبك...` });
-      setTimeout(() => fb.delete().catch(() => {}), 4000);
-    }
-  } catch {}
-  await publishRequest(message, req, p.requestId);
-}
-
-async function handleOfferImageUpload(message, p) {
-  const post  = p.postType === 'trade' ? activeTrades.get(p.postId) : activeRequests.get(p.postId);
-  if (!post)  { pendingImageUploads.delete(message.author.id); return; }
-  const offer = post.offers.get(p.offerId);
-  if (!offer) { pendingImageUploads.delete(message.author.id); return; }
-
-  const img = await extractImage(message);
-  if (img === false) return;
-
-  offer.imageUrl = img;
-  post.offers.set(p.offerId, offer);
-  if (p.postType === 'trade') activeTrades.set(p.postId, post);
-  else activeRequests.set(p.postId, post);
-  pendingImageUploads.delete(message.author.id);
+client.on('messageCreate', async (msg) => {
+  if (msg.author.bot) return;
+  if (CONFIG.ECONOMY_CHANNEL_ID && msg.channelId !== CONFIG.ECONOMY_CHANNEL_ID) return;
+  const parts = msg.content.trim().split(/\s+/), cmd = parts[0], args = parts.slice(1);
+  const user = getUser(msg.author.id, msg.author.username);
 
   try {
-    const me = await client.users.fetch(message.author.id);
-    await me.send({ embeds: [
-      new EmbedBuilder().setColor('#00FF7F').setTitle('✅ تم تقديم عرضك بنجاح!')
-        .setDescription(`أُرسل عرضك إلى **${post.username}**!\nستصلك رسالة خاصة عندما يرد عليك.`)
+    // ==========================
+    // الحساب
+    // ==========================
+    if (cmd==='ملفي'||cmd==='بروفايل') {
+      const target = msg.mentions.users.first(), u = target?getUser(target.id,target.username):user;
+      const prot = u.protection_until > Date.now();
+      const career = u.career ? CAREERS[u.career] : null;
+      const lostLawsuits = db.prepare("SELECT COUNT(*) as c FROM lawsuits WHERE defendant_id=? AND verdict='plaintiff'").get(u.id);
+      return msg.reply({embeds:[new EmbedBuilder()
+        .setTitle(`📊 الملف التجاري — ${target?.username||msg.author.username}`)
+        .setThumbnail((target||msg.author).displayAvatarURL())
+        .setColor(prot?'#00ff88':'#4e8aff')
         .addFields(
-          { name: '🔄 عرضك',       value: offer.item,     inline: true },
-          { name: '💵 دخله/ثانية', value: offer.income,   inline: true },
-          { name: '⬆️ تطويراته',   value: offer.upgrades, inline: true }
-        ).setTimestamp()
-    ]});
-  } catch {}
-
-  try {
-    const owner       = await client.users.fetch(post.userId);
-    const totalOffers = post.offers.size;
-    const dm = new EmbedBuilder()
-      .setColor('#FFD700')
-      .setAuthor({ name: `💬 عرض جديد من ${offer.username}!`, iconURL: offer.userAvatar })
-      .setTitle(p.postType === 'trade'
-        ? `وصلك عرض جديد على تريدك — ${post.offerItem}`
-        : `وصلك عرض جديد على طلبك — ${post.wantItem}`)
-      .addFields(
-        { name: '🔄 يعرض',            value: `\`${offer.item}\``, inline: true },
-        { name: '💵 دخله/ثانية',     value: offer.income,         inline: true },
-        { name: '⬆️ تطويراته',       value: offer.upgrades,       inline: false },
-        { name: '📝 ملاحظاته',        value: offer.notes,          inline: false },
-        { name: '📊 إجمالي العروض',   value: `${totalOffers} عرض`, inline: false },
-        { name: '📌 كيف تشوف الكل؟', value: 'اضغط **"👁️ عروضي"** في منشورك', inline: false }
-      ).setTimestamp();
-    if (offer.imageUrl) dm.setThumbnail(offer.imageUrl);
-    await owner.send({ embeds: [dm] });
-  } catch {}
-}
-
-async function handleSupplierImageUpload(message, p) {
-  await handleOfferImageUpload(message, {
-    ...p, step: 'offer_image',
-    offerId: p.offerId, postId: p.requestId, postType: 'request'
-  });
-}
-
-// ══════════════════════════════════════════════════════
-//  📢  نشر التريد
-// ══════════════════════════════════════════════════════
-function buildCompactTradeEmbed(trade, tradeId) {
-  const rep = reputationField(trade.userId);
-  const e = new EmbedBuilder()
-    .setColor('#FF6B35')
-    .setAuthor({ name: `🔄 تريد من ${trade.username}`, iconURL: trade.userAvatar })
-    .setTitle(`🎁 الشي المعروض: ${trade.offerItem}`)
-    .addFields(
-      { name: '⬆️ التطويرات',      value: trade.upgrades,  inline: true },
-      { name: '💵 الدخل/ثانية',   value: trade.income,    inline: true },
-      { name: '💰 يبي مقابله',     value: trade.wantItem,  inline: false },
-      { name: '📝 ملاحظات',        value: trade.notes,     inline: false },
-      { name: '👤 صاحب التريد',    value: `<@${trade.userId}>`, inline: true },
-      { name: '🆔 Trade ID',       value: `\`${tradeId.slice(-6)}\``, inline: true },
-      { name: '⭐ السمعة',          value: rep,             inline: true }
-    )
-    .setFooter({ text: 'Steal a Brainrot Trading Bot', iconURL: client.user.displayAvatarURL() })
-    .setTimestamp();
-  if (trade.imageUrl) e.setThumbnail(trade.imageUrl);
-  return e;
-}
-
-function buildCompactRequestEmbed(req, requestId) {
-  const rep = reputationField(req.userId);
-  const e = new EmbedBuilder()
-    .setColor('#00B4D8')
-    .setAuthor({ name: `🛒 طلب من ${req.username}`, iconURL: req.userAvatar })
-    .setTitle(`🎯 الشي المطلوب: ${req.wantItem}`)
-    .addFields(
-      { name: '📋 تفاصيل الطلب',   value: req.wantDetails,  inline: false },
-      { name: '🎁 عنده مقابله',     value: req.offerItem,    inline: true },
-      { name: '💵 الدخل/ثانية',    value: req.offerIncome,  inline: true },
-      { name: '📝 ملاحظات',         value: req.notes,        inline: false },
-      { name: '👤 صاحب الطلب',      value: `<@${req.userId}>`, inline: true },
-      { name: '🆔 Request ID',      value: `\`${requestId.slice(-6)}\``, inline: true },
-      { name: '⭐ السمعة',           value: rep,              inline: true }
-    )
-    .setFooter({ text: 'Steal a Brainrot Trading Bot', iconURL: client.user.displayAvatarURL() })
-    .setTimestamp();
-  if (req.imageUrl) e.setThumbnail(req.imageUrl);
-  return e;
-}
-
-async function publishTrade(message, trade, tradeId) {
-  const embed = buildCompactTradeEmbed(trade, tradeId);
-
-  // نشر التريد في القناة
-  try {
-    const ch = await client.channels.fetch(TRADE_CHANNEL_ID).catch(() => null);
-    if (!ch) {
-      console.error('❌ ما لقيت قناة التريدات! تأكد من TRADE_CHANNEL_ID');
-      return;
+          {name:'💵 النقد',value:fmt(u.cash),inline:true},{name:'🏦 البنك',value:fmt(u.bank),inline:true},{name:'📊 الإجمالي',value:fmt(u.cash+u.bank),inline:true},
+          {name:'💼 المهنة',value:career?`${career.emoji} ${u.career}`:'❌ بدون مهنة',inline:true},
+          {name:'⭐ الائتمان',value:`${u.credit_score}/100`,inline:true},{name:'🛡 الحماية',value:prot?`⏰ ${fmtTime(u.protection_until-Date.now())}`:'❌',inline:true},
+          {name:'💳 القرض',value:u.loan>0?fmt(u.loan):'لا يوجد',inline:true},
+          {name:'⚖️ السجل القضائي',value:lostLawsuits.c>0?`🔴 دعاوى خسرها (${lostLawsuits.c})`:'✅ نظيف',inline:true},
+        ).setTimestamp()]});
     }
-    await ch.send({
-      embeds: [embed],
-      components: [
-        new ActionRowBuilder().addComponents(
-          mkBtn(`make_offer_${tradeId}`,        '💬 تقديم عرض', ButtonStyle.Primary),
-          mkBtn(`view_offers_trade_${tradeId}`, '👁️ عروضي',     ButtonStyle.Secondary),
-          mkBtn(`delete_trade_${tradeId}`,      '🗑️ حذف',       ButtonStyle.Danger)
-        ),
-        new ActionRowBuilder().addComponents(
-          mkBtn(`repost_trade_${tradeId}`, '🔄 إعادة نشر', ButtonStyle.Success),
-          mkBtn('my_trades',               '📋 تريداتي',    ButtonStyle.Secondary)
-        )
-      ]
-    });
-    console.log(`✅ نُشر تريد: ${tradeId}`);
-  } catch (err) {
-    console.error('❌ خطأ في نشر التريد:', err.message);
-    return;
-  }
 
-  // DM تأكيد للبائع
-  const confirmEmbed = new EmbedBuilder().setColor('#00FF7F').setTitle('✅ تم نشر تريدك!')
-    .setDescription(
-      `نُشر تريدك في <#${TRADE_CHANNEL_ID}> بنجاح! 🎉\n` +
-      `الناس يقدرون يحطون عروض وأنت تختار الأنسب.\n` +
-      `ستوصلك رسالة خاصة مع كل عرض جديد.`
-    )
-    .addFields(
-      { name: '🎁 عرضك',  value: trade.offerItem,                             inline: true },
-      { name: '💰 مقابل', value: trade.wantItem,                               inline: true },
-      { name: '🖼️ صورة', value: trade.imageUrl ? '✅ مرفقة' : '❌ بدون صورة', inline: true }
-    ).setTimestamp();
-
-  try {
-    const owner = await client.users.fetch(trade.userId);
-    await owner.send({ embeds: [confirmEmbed] });
-  } catch {
-    // لو DM مغلق — أرسل في قناة الأمر وتحذف
-    try {
-      const fallbackCh = await client.channels.fetch(trade.channelId).catch(() => null);
-      if (fallbackCh) {
-        const fb = await fallbackCh.send({ content: `<@${trade.userId}>`, embeds: [confirmEmbed] });
-        setTimeout(() => fb.delete().catch(() => {}), 8000);
-      }
-    } catch {}
-  }
-}
-
-// ══════════════════════════════════════════════════════
-//  📢  نشر الطلب
-// ══════════════════════════════════════════════════════
-async function publishRequest(message, req, requestId) {
-  const embed = buildCompactRequestEmbed(req, requestId);
-
-  try {
-    const ch = await client.channels.fetch(REQUEST_CHANNEL_ID).catch(() => null);
-    if (!ch) {
-      console.error('❌ ما لقيت قناة الطلبات! تأكد من REQUEST_CHANNEL_ID');
-      return;
+    if (cmd==='رصيد') {
+      return msg.reply({embeds:[new EmbedBuilder().setTitle('💳 رصيدك').setColor('#4e8aff')
+        .addFields({name:'💵 النقد',value:fmt(user.cash),inline:true},{name:'🏦 البنك',value:fmt(user.bank),inline:true},{name:'📊 الإجمالي',value:fmt(user.cash+user.bank),inline:true},{name:'⭐ الائتمان',value:`${user.credit_score}/100`,inline:true})]});
     }
-    await ch.send({
-      embeds: [embed],
-      components: [
-        new ActionRowBuilder().addComponents(
-          mkBtn(`fulfill_request_${requestId}`,     '💬 تقديم عرض', ButtonStyle.Success),
-          mkBtn(`view_offers_request_${requestId}`, '👁️ عروضي',     ButtonStyle.Secondary),
-          mkBtn(`delete_request_${requestId}`,      '🗑️ حذف',       ButtonStyle.Danger)
-        ),
-        new ActionRowBuilder().addComponents(
-          mkBtn(`repost_request_${requestId}`, '🔄 إعادة نشر', ButtonStyle.Success),
-          mkBtn('my_requests',                 '📋 طلباتي',     ButtonStyle.Secondary)
-        )
-      ]
-    });
-    console.log(`✅ نُشر طلب: ${requestId}`);
-  } catch (err) {
-    console.error('❌ خطأ في نشر الطلب:', err.message);
-    return;
-  }
 
-  const confirmEmbed = new EmbedBuilder().setColor('#00B4D8').setTitle('✅ تم نشر طلبك!')
-    .setDescription(
-      `نُشر طلبك في <#${REQUEST_CHANNEL_ID}> بنجاح! 🎉\n` +
-      `الناس يقدرون يعرضون ما عندهم وأنت تختار الأنسب.\n` +
-      `ستوصلك رسالة خاصة مع كل عرض جديد.`
-    )
-    .addFields(
-      { name: '🎯 طلبك',   value: req.wantItem,                               inline: true },
-      { name: '🎁 مقابله', value: req.offerItem,                               inline: true },
-      { name: '🖼️ صورة',  value: req.imageUrl ? '✅ مرفقة' : '❌ بدون صورة', inline: true }
-    ).setTimestamp();
+    if (user.credit_score <= 0) {
+      const allowed = ['ملفي','بروفايل','رصيد','وقت','اوامر','أوامر','ائتمان','عمل','مهنة','المهن'];
+      if (!allowed.includes(cmd)) return msg.reply('🚫 **ائتمانك منهار!** خدماتك التجارية موقوفة.\nاكتب `عمل` لترفع ائتمانك تدريجياً.');
+    }
 
-  try {
-    const owner = await client.users.fetch(req.userId);
-    await owner.send({ embeds: [confirmEmbed] });
-  } catch {
-    try {
-      const fallbackCh = await client.channels.fetch(req.channelId).catch(() => null);
-      if (fallbackCh) {
-        const fb = await fallbackCh.send({ content: `<@${req.userId}>`, embeds: [confirmEmbed] });
-        setTimeout(() => fb.delete().catch(() => {}), 8000);
+    // ==========================
+    // المهن
+    // ==========================
+    if (cmd==='المهن') {
+      const total = user.cash+user.bank;
+      const desc = Object.entries(CAREERS).map(([name,c])=>{
+        const locked = total < c.minLevel*10_000 && c.minLevel>1;
+        return `${c.emoji} **${name}** — راتب ${fmt(c.baseSalary)}/ساعة\n${c.desc}${locked?' 🔒 (يحتاج ثروة أعلى)':''}`;
+      }).join('\n\n');
+      return msg.reply({embeds:[new EmbedBuilder().setTitle('💼 المهن المتاحة').setColor('#3498db')
+        .setDescription(desc).setFooter({text:'مهنة [الاسم] للاختيار'})]});
+    }
+
+    if (cmd==='مهنة') {
+      const careerName = args[0];
+      if (!careerName || !CAREERS[careerName]) return msg.reply(`❌ مهنة غير موجودة! اكتب \`المهن\` لعرض الخيارات`);
+      const career = CAREERS[careerName];
+      const total = user.cash+user.bank;
+      if (career.minLevel > 1 && total < career.minLevel*10_000) {
+        return msg.reply(`❌ تحتاج ثروة إجمالية ${fmt(career.minLevel*10_000)} على الأقل لهذه المهنة!`);
       }
-    } catch {}
-  }
-}
+      db.prepare('UPDATE users SET career=? WHERE id=?').run(careerName, msg.author.id);
+      return msg.reply({embeds:[new EmbedBuilder().setTitle(`✅ أصبحت ${career.emoji} ${careerName}!`).setColor('#00ff88')
+        .setDescription(`راتبك الآن: **${fmt(career.baseSalary)}** في الساعة\n${career.desc}`)]});
+    }
 
-// ══════════════════════════════════════════════════════
-//  👁️  عرض العروض لصاحب المنشور
-// ══════════════════════════════════════════════════════
-async function showOffersToOwner(interaction, post, postId, pType) {
-  if (post.offers.size === 0)
-    return interaction.reply({ embeds: [
-      new EmbedBuilder().setColor('#FFA500').setTitle('📭 ما في عروض بعد')
-        .setDescription('لم يصلك أي عرض حتى الآن. انتظر قليلاً!').setTimestamp()
-    ], ephemeral: true });
+    if (cmd==='عمل') {
+      const left = cooldownLeft(user,'عمل'); if(left>0) return msg.reply(`⏰ ارجع بعد **${fmtTime(left)}**`);
+      const career = user.career ? CAREERS[user.career] : CAREERS['عامل'];
+      const tax = Math.floor(career.baseSalary*0.02);
+      let earned = Math.floor(career.baseSalary*0.8 + Math.random()*career.baseSalary*0.4) - tax;
+      db.prepare('UPDATE users SET last_work=?, credit_score=MIN(100,credit_score+1), cash=cash+? WHERE id=?').run(Date.now(), earned, msg.author.id);
+      db.prepare('UPDATE treasury SET amount=amount+? WHERE id=1').run(tax);
+      return msg.reply({embeds:[new EmbedBuilder().setTitle(`${career.emoji} يوم عمل ناجح!`).setColor('#ffd700')
+        .setDescription(`عملت كـ **${user.career||'عامل'}** وكسبت **${fmt(earned)}**\n(بعد ضريبة ${fmt(tax)})`)
+        .setFooter({text:'⭐ +1 ائتمان | ارجع كل ساعة'})]});
+    }
 
-  const embeds = [], rows = [];
-  let i = 0;
+    // ==========================
+    // البنك
+    // ==========================
+    if (cmd==='إيداع'||cmd==='ايداع') {
+      const amount = parseAmount(args[0], user.cash);
+      if (isNaN(amount)||amount<=0) return msg.reply('❌ الاستخدام: `إيداع [مبلغ/كل/نص/ربع]`');
+      if (user.cash<amount) return msg.reply('❌ نقدك ما يكفي!');
+      db.prepare('UPDATE users SET cash=cash-?, bank=bank+? WHERE id=?').run(amount,amount,msg.author.id);
+      return msg.reply({embeds:[new EmbedBuilder().setTitle('🏦 تم الإيداع').setColor('#00ff88').setDescription(`أودعت **${fmt(amount)}**`)]});
+    }
+    if (cmd==='سحب') {
+      const amount = parseAmount(args[0], user.bank);
+      if (isNaN(amount)||amount<=0) return msg.reply('❌ الاستخدام: `سحب [مبلغ/كل/نص/ربع]`');
+      if (user.bank<amount) return msg.reply('❌ رصيد البنك ما يكفي!');
+      db.prepare('UPDATE users SET bank=bank-?, cash=cash+? WHERE id=?').run(amount,amount,msg.author.id);
+      return msg.reply({embeds:[new EmbedBuilder().setTitle('💵 تم السحب').setColor('#00ff88').setDescription(`سحبت **${fmt(amount)}**`)]});
+    }
+    if (cmd==='تحويل') {
+      const target = msg.mentions.users.first(), amount = parseAmount(args[1], user.cash);
+      if (!target||isNaN(amount)||amount<=0) return msg.reply('❌ الاستخدام: `تحويل @شخص المبلغ`');
+      if (target.id===msg.author.id) return msg.reply('❌ ما تقدر تحوّل لنفسك!');
+      const left = Math.max(0, TRANSFER_COOLDOWN-(Date.now()-(user.last_transfer||0)));
+      if (left>0) return msg.reply(`⏰ التحويل القادم بعد **${fmtTime(left)}**`);
+      const maxT = Math.floor((user.cash+user.bank)*0.5);
+      if (amount>maxT) return msg.reply(`❌ الحد الأقصى: **${fmt(maxT)}**`);
+      if (user.cash<amount) return msg.reply('❌ نقدك ما يكفي!');
+      const fee = Math.max(1,Math.floor(amount*0.02)), received = amount-fee;
+      db.prepare('UPDATE users SET cash=cash-?, last_transfer=? WHERE id=?').run(amount,Date.now(),msg.author.id);
+      getUser(target.id,target.username);
+      db.prepare('UPDATE users SET cash=cash+? WHERE id=?').run(received,target.id);
+      db.prepare('UPDATE treasury SET amount=amount+? WHERE id=1').run(fee);
+      try { client.users.fetch(target.id).then(u=>u.send(`💸 **${msg.author.username}** حوّل لك **${fmt(received)}**`).catch(()=>{})).catch(()=>{}); } catch(e){}
+      return msg.reply({embeds:[new EmbedBuilder().setTitle('✅ تم التحويل').setColor('#00ff88')
+        .addFields({name:'📤 من',value:msg.author.username,inline:true},{name:'📥 إلى',value:target.username,inline:true},{name:'✅ وصل',value:fmt(received),inline:true})]});
+    }
+    if (cmd==='قرض') {
+      const amount = parseAmount(args[0]);
+      if (isNaN(amount)||amount<=0) return msg.reply('❌ الاستخدام: `قرض المبلغ`');
+      if (user.loan>0) return msg.reply('❌ عندك قرض! سدده أولاً');
+      const left = Math.max(0, 24*60*60*1000-(Date.now()-(user.last_loan||0)));
+      if (left>0) return msg.reply(`⏰ القرض القادم بعد **${fmtTime(left)}**`);
+      if (amount>20_000) return msg.reply(`❌ الحد الأقصى: **${fmt(20_000)}**`);
+      const repay = Math.floor(amount*1.10), due = Date.now()+7*24*60*60*1000;
+      db.prepare('UPDATE users SET cash=cash+?, loan=?, loan_due=?, last_loan=? WHERE id=?').run(amount,repay,due,Date.now(),msg.author.id);
+      return msg.reply({embeds:[new EmbedBuilder().setTitle('🏦 تم منح القرض').setColor('#ffd700')
+        .addFields({name:'💰 استلمت',value:fmt(amount),inline:true},{name:'💸 للسداد',value:fmt(repay),inline:true},{name:'⏰ المهلة',value:'7 أيام',inline:true})
+        .setFooter({text:'القرض القادم بعد 24 ساعة'})]});
+    }
+    if (cmd==='سداد') {
+      if (user.loan===0) return msg.reply('✅ ما عليك قرض!');
+      if (user.cash<user.loan) return msg.reply(`❌ تحتاج **${fmt(user.loan)}**`);
+      const loan = user.loan;
+      db.prepare('UPDATE users SET cash=cash-?, loan=0, loan_due=0, credit_score=MIN(100,credit_score+5) WHERE id=?').run(loan,msg.author.id);
+      return msg.reply({embeds:[new EmbedBuilder().setTitle('✅ تم السداد!').setColor('#00ff88').setDescription(`سددت **${fmt(loan)}**\n⭐ +5 ائتمان`)]});
+    }
+    if (cmd==='حماية') {
+      const opts = {'6':{h:6,p:7_000},'12':{h:12,p:35_000},'24':{h:24,p:150_000},'72':{h:72,p:300_000}};
+      const opt = opts[args[0]];
+      if (!opt) return msg.reply('❌ `حماية 6/12/24/72`');
+      if (user.cash<opt.p) return msg.reply(`❌ تحتاج **${fmt(opt.p)}**`);
+      const until = Date.now()+opt.h*3600000;
+      db.prepare('UPDATE users SET cash=cash-?, protection_until=? WHERE id=?').run(opt.p,until,msg.author.id);
+      return msg.reply({embeds:[new EmbedBuilder().setTitle('🛡 تم التفعيل!').setColor('#00ff88').addFields({name:'⏰ المدة',value:`${opt.h}س`,inline:true},{name:'💰 التكلفة',value:fmt(opt.p),inline:true})]});
+    }
+    if (cmd==='ائتمان') {
+      return msg.reply({embeds:[new EmbedBuilder().setTitle('⭐ الائتمان التجاري').setColor('#ffd700')
+        .addFields({name:'📊 نقاطك',value:`${user.credit_score}/100`},{name:'📈 كيف ترفع؟',value:'`عمل` +1 | `سداد` +5',inline:false},{name:'📉 كيف تنخفض؟',value:'تخريب فاشل، خسارة دعوى',inline:false})]});
+    }
 
-  for (const [offerId, offer] of post.offers) {
-    if (i >= 5) break;
-    const offerEmbed = new EmbedBuilder()
-      .setColor('#5865F2')
-      .setAuthor({ name: `عرض ${i + 1} من ${offer.username}`, iconURL: offer.userAvatar })
-      .addFields(
-        { name: '🔄 يعرض',        value: `\`${offer.item}\``, inline: true },
-        { name: '💵 دخله/ثانية', value: offer.income,         inline: true },
-        { name: '⬆️ تطويراته',   value: offer.upgrades,       inline: true },
-        { name: '📝 ملاحظاته',    value: offer.notes,          inline: false }
-      ).setTimestamp(offer.timestamp);
-    if (offer.imageUrl) offerEmbed.setThumbnail(offer.imageUrl);
-    embeds.push(offerEmbed);
-
-    rows.push(new ActionRowBuilder().addComponents(
-      mkBtn(`accept_offer_${postId}__${offerId}__${pType}`, `✅ قبول عرض ${i + 1}`, ButtonStyle.Success),
-      mkBtn(`reject_offer_${postId}__${offerId}__${pType}`, `❌ رفض عرض ${i + 1}`,  ButtonStyle.Danger)
-    ));
-    i++;
-  }
-
-  const header = new EmbedBuilder().setColor('#FFD700')
-    .setTitle(`📬 العروض على ${pType === 'trade' ? 'تريدك' : 'طلبك'} — ${post.offers.size} عرض`)
-    .setDescription('اضغط **✅ قبول** على العرض اللي يناسبك، أو **❌ رفض** للتخلص منه.\n> التريد يبقى مفتوح حتى تقبل عرضاً واحداً.')
-    .setTimestamp();
-
-  await interaction.reply({ embeds: [header, ...embeds], components: rows, ephemeral: true });
-}
-
-// ══════════════════════════════════════════════════════
-//  📋  تريداتي / طلباتي من الزر
-// ══════════════════════════════════════════════════════
-async function showMyTrades(interaction) {
-  const userId   = interaction.user.id;
-  const myTrades = [...activeTrades.entries()].filter(([, t]) => t.userId === userId && !t.locked);
-
-  if (myTrades.length === 0)
-    return interaction.reply({ embeds: [
-      new EmbedBuilder().setColor('#FFA500').setTitle('📋 تريداتي')
-        .setDescription('ما عندك تريدات نشطة!\nاستخدم `!تريد` لإنشاء تريد.').setTimestamp()
-    ], ephemeral: true });
-
-  const embeds = [], rows = [];
-  let i = 0;
-  for (const [tradeId, trade] of myTrades) {
-    if (i >= 5) break;
-    const e = new EmbedBuilder().setColor('#FF6B35').setTitle(`${i + 1}. ${trade.offerItem}`)
-      .addFields(
-        { name: '💰 يبي',         value: trade.wantItem,             inline: true },
-        { name: '💵 دخله/ثانية', value: trade.income,               inline: true },
-        { name: '💬 العروض',      value: `${trade.offers.size} عرض`, inline: true }
-      ).setTimestamp(trade.timestamp);
-    if (trade.imageUrl) e.setThumbnail(trade.imageUrl);
-    embeds.push(e);
-    rows.push(new ActionRowBuilder().addComponents(
-      mkBtn(`myrepost_trade_${tradeId}`,    `🔄 إعادة نشر ${i + 1}`, ButtonStyle.Success),
-      mkBtn(`view_offers_trade_${tradeId}`, `👁️ عروض ${i + 1}`,      ButtonStyle.Secondary),
-      mkBtn(`delete_trade_${tradeId}`,      `🗑️ حذف ${i + 1}`,       ButtonStyle.Danger)
-    ));
-    i++;
-  }
-  const header = new EmbedBuilder().setColor('#FF6B35')
-    .setTitle(`📋 تريداتي — ${myTrades.length} تريد نشط`)
-    .setDescription('تريداتك النشطة — تقدر تعيد نشرها أو تشوف عروضها أو تحذفها.').setTimestamp();
-  await interaction.reply({ embeds: [header, ...embeds], components: rows, ephemeral: true });
-}
-
-async function showMyRequests(interaction) {
-  const userId     = interaction.user.id;
-  const myRequests = [...activeRequests.entries()].filter(([, r]) => r.userId === userId && !r.locked);
-
-  if (myRequests.length === 0)
-    return interaction.reply({ embeds: [
-      new EmbedBuilder().setColor('#FFA500').setTitle('📋 طلباتي')
-        .setDescription('ما عندك طلبات نشطة!\nاستخدم `!طلب` لإنشاء طلب.').setTimestamp()
-    ], ephemeral: true });
-
-  const embeds = [], rows = [];
-  let i = 0;
-  for (const [requestId, req] of myRequests) {
-    if (i >= 5) break;
-    const e = new EmbedBuilder().setColor('#00B4D8').setTitle(`${i + 1}. يطلب: ${req.wantItem}`)
-      .addFields(
-        { name: '🎁 مقابله',      value: req.offerItem,              inline: true },
-        { name: '💵 دخله/ثانية', value: req.offerIncome,            inline: true },
-        { name: '💬 العروض',      value: `${req.offers.size} عرض`,   inline: true }
-      ).setTimestamp(req.timestamp);
-    if (req.imageUrl) e.setThumbnail(req.imageUrl);
-    embeds.push(e);
-    rows.push(new ActionRowBuilder().addComponents(
-      mkBtn(`myrepost_request_${requestId}`,    `🔄 إعادة نشر ${i + 1}`, ButtonStyle.Success),
-      mkBtn(`view_offers_request_${requestId}`, `👁️ عروض ${i + 1}`,      ButtonStyle.Secondary),
-      mkBtn(`delete_request_${requestId}`,      `🗑️ حذف ${i + 1}`,       ButtonStyle.Danger)
-    ));
-    i++;
-  }
-  const header = new EmbedBuilder().setColor('#00B4D8')
-    .setTitle(`📋 طلباتي — ${myRequests.length} طلب نشط`)
-    .setDescription('طلباتك النشطة — تقدر تعيد نشرها أو تشوف عروضها أو تحذفها.').setTimestamp();
-  await interaction.reply({ embeds: [header, ...embeds], components: rows, ephemeral: true });
-}
-
-// ══════════════════════════════════════════════════════
-//  🔄  إعادة نشر تريد
-// ══════════════════════════════════════════════════════
-async function repostTrade(source, trade, tradeId) {
-  const embed = buildCompactTradeEmbed(trade, tradeId);
-
-  const ch = client.channels.cache.get(TRADE_CHANNEL_ID);
-  if (ch) await ch.send({
-    embeds: [embed],
-    components: [
-      new ActionRowBuilder().addComponents(
-        mkBtn(`make_offer_${tradeId}`,        '💬 تقديم عرض', ButtonStyle.Primary),
-        mkBtn(`view_offers_trade_${tradeId}`, '👁️ عروضي',     ButtonStyle.Secondary),
-        mkBtn(`delete_trade_${tradeId}`,      '🗑️ حذف',       ButtonStyle.Danger)
-      ),
-      new ActionRowBuilder().addComponents(
-        mkBtn(`repost_trade_${tradeId}`, '🔄 إعادة نشر', ButtonStyle.Success),
-        mkBtn('my_trades',               '📋 تريداتي',    ButtonStyle.Secondary)
-      )
-    ]
-  });
-}
-
-// ══════════════════════════════════════════════════════
-//  🔄  إعادة نشر طلب
-// ══════════════════════════════════════════════════════
-async function repostRequest(source, req, requestId) {
-  const embed = buildCompactRequestEmbed(req, requestId);
-
-  const ch = client.channels.cache.get(REQUEST_CHANNEL_ID);
-  if (ch) await ch.send({
-    embeds: [embed],
-    components: [
-      new ActionRowBuilder().addComponents(
-        mkBtn(`fulfill_request_${requestId}`,     '💬 تقديم عرض', ButtonStyle.Success),
-        mkBtn(`view_offers_request_${requestId}`, '👁️ عروضي',     ButtonStyle.Secondary),
-        mkBtn(`delete_request_${requestId}`,      '🗑️ حذف',       ButtonStyle.Danger)
-      ),
-      new ActionRowBuilder().addComponents(
-        mkBtn(`repost_request_${requestId}`, '🔄 إعادة نشر', ButtonStyle.Success),
-        mkBtn('my_requests',                 '📋 طلباتي',     ButtonStyle.Secondary)
-      )
-    ]
-  });
-}
-
-// ══════════════════════════════════════════════════════
-//  📊  عرض عام
-// ══════════════════════════════════════════════════════
-async function handleViewTradesInteraction(interaction) {
-  if (!activeTrades.size) return interaction.reply({ embeds: [
-    new EmbedBuilder().setColor('#FFA500').setTitle('📋 التريدات النشطة').setDescription('❌ ما في تريدات!').setTimestamp()
-  ], ephemeral: true });
-  const embed = new EmbedBuilder().setColor('#FF6B35').setTitle('📋 التريدات النشطة').setTimestamp();
-  let i = 0;
-  for (const [, t] of activeTrades) {
-    if (i++ >= 5) break;
-    embed.addFields({
-      name: `${t.offerItem} ${t.locked ? '🔴' : '🟢'}${t.imageUrl ? ' 🖼️' : ''}`,
-      value: `👤 <@${t.userId}>\n💰 يبي: \`${t.wantItem}\`\n💵 ${t.income}/sec\n💬 ${t.offers.size} عرض`,
-      inline: true
-    });
-  }
-  await interaction.reply({ embeds: [embed], ephemeral: true });
-}
-
-async function handleViewRequestsInteraction(interaction) {
-  if (!activeRequests.size) return interaction.reply({ embeds: [
-    new EmbedBuilder().setColor('#FFA500').setTitle('🛒 الطلبات النشطة').setDescription('❌ ما في طلبات!').setTimestamp()
-  ], ephemeral: true });
-  const embed = new EmbedBuilder().setColor('#00B4D8').setTitle('🛒 الطلبات النشطة').setTimestamp();
-  let i = 0;
-  for (const [, r] of activeRequests) {
-    if (i++ >= 5) break;
-    embed.addFields({
-      name: `يطلب: ${r.wantItem} ${r.locked ? '🔴' : '🟢'}${r.imageUrl ? ' 🖼️' : ''}`,
-      value: `👤 <@${r.userId}>\n🎁 مقابله: \`${r.offerItem}\`\n💵 ${r.offerIncome}/sec\n💬 ${r.offers.size} عرض`,
-      inline: true
-    });
-  }
-  await interaction.reply({ embeds: [embed], ephemeral: true });
-}
-
-async function showAllInteraction(interaction) {
-  await interaction.reply({ embeds: [
-    new EmbedBuilder().setColor('#5865F2').setTitle('📊 نظرة عامة — Steal a Brainrot')
-      .addFields(
-        { name: '🔄 التريدات النشطة',    value: `${activeTrades.size} تريد`,    inline: true },
-        { name: '🛒 الطلبات النشطة',     value: `${activeRequests.size} طلب`,   inline: true },
-        { name: '⚖️ التيكيتات المفتوحة', value: `${activeTickets.size} تيكيت`, inline: true }
-      ).setTimestamp()
-  ], ephemeral: true });
-}
-
-// ══════════════════════════════════════════════════════
-//  ⚖️  تيكيت الوسيط
-// ══════════════════════════════════════════════════════
-async function createMiddlemanTicket(source, data, postId, type) {
-  const guild = source.guild, isTrade = type === 'trade';
-  const partyA = isTrade ? data.sellerId : data.requesterId;
-  const partyB = isTrade ? data.buyerId  : data.supplierId;
-  const nameA  = isTrade ? data.sellerName : data.requesterName;
-  const nameB  = isTrade ? data.buyerName  : data.supplierName;
-
-  const channelName = `${isTrade ? 'تريد' : 'طلب'}-${nameA}-${nameB}`
-    .slice(0, 90).replace(/\s+/g, '-').replace(/[^\u0600-\u06FFa-z0-9\-]/gi, '');
-
-  let ticketChannel;
-  try {
-    ticketChannel = await guild.channels.create({
-      name: channelName, type: ChannelType.GuildText, parent: MM_CATEGORY_ID || null,
-      permissionOverwrites: [
-        { id: guild.roles.everyone.id, deny:  [PermissionFlagsBits.ViewChannel] },
-        { id: partyA,       allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory] },
-        { id: partyB,       allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory] },
-        { id: MM_ROLE_ID,   allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory, PermissionFlagsBits.ManageChannels] },
-        { id: client.user.id, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ManageChannels, PermissionFlagsBits.ReadMessageHistory] },
-      ]
-    });
-  } catch (err) {
-    console.error('❌ خطأ في إنشاء التيكيت:', err);
-    try { await source.channel.send('❌ ما قدرت أنشئ تيكيت! تأكد صلاحيات البوت.'); } catch {}
-    return;
-  }
-
-  activeTickets.set(ticketChannel.id, { ...data, type, postId, status: 'pending' });
-  scheduleMMReminder(ticketChannel.id, postId);
-
-  const ticketEmbed = new EmbedBuilder()
-    .setColor('#FFD700')
-    .setTitle(`⚖️ تيكيت وسيط — ${isTrade ? 'تريد' : 'طلب'} Steal a Brainrot`)
-    .setDescription(`<@&${MM_ROLE_ID}> سيشرف على العملية كاملة.\n\u200b`)
-    .addFields(
-      { name: '╔══════════════════════╗', value: '_ _', inline: false },
-      { name: isTrade ? '🧑‍💼 __البائع__'  : '🛒 __الطالب__',  value: `<@${partyA}>`, inline: true },
-      { name: isTrade ? '🛒 __المشتري__' : '🎁 __المورّد__', value: `<@${partyB}>`, inline: true },
-      { name: '_ _', value: '━━━━━━━━━━━━━━━━━━━━━━━━', inline: false },
-      {
-        name: isTrade ? '🎁 __عرض البائع__' : '🎯 __الشي المطلوب__',
-        value: `\`\`\`${isTrade ? data.offerItem : data.wantItem}\`\`\``, inline: false
-      },
-      ...(isTrade
-        ? [
-            { name: '⬆️ تطويراته', value: data.upgrades, inline: true },
-            { name: '💵 دخله',     value: data.income,   inline: true },
-            { name: '📝 ملاحظاته', value: data.notes || 'لا يوجد', inline: false },
-          ]
-        : [
-            { name: '🎁 مقابله', value: data.offerItem,   inline: true },
-            { name: '💵 دخله',   value: data.offerIncome, inline: true },
-          ]
-      ),
-      { name: '_ _', value: '━━━━━━━━━━━━━━━━━━━━━━━━', inline: false },
-      {
-        name: isTrade ? '🔄 __عرض المشتري__' : '🎁 __عرض المورّد__',
-        value: `\`\`\`${isTrade ? data.buyerItem : data.supplierItem}\`\`\``, inline: false
-      },
-      { name: '⬆️ تطويراته', value: isTrade ? data.buyerUpgrades    : data.supplierUpgrades,  inline: true },
-      { name: '💵 دخله',     value: isTrade ? data.buyerIncome      : data.supplierIncome,    inline: true },
-      { name: '📝 ملاحظاته', value: isTrade ? (data.buyerNotes || 'لا يوجد') : (data.supplierNotes || 'لا يوجد'), inline: false },
-      { name: '╚══════════════════════╝', value: '_ _', inline: false },
-      {
-        name: '📋 __خطوات إتمام العملية__',
-        value: '1️⃣ الوسيط يتحقق من الطرفين والصور\n2️⃣ الطرف الأول يسلّم شيئه للوسيط\n3️⃣ الطرف الثاني يسلّم شيئه للوسيط\n4️⃣ الوسيط يوزّع ويضغط ✅ تمت العملية',
-        inline: false
+    // ==========================
+    // الشركات (سوق + شراء بالأزرار)
+    // ==========================
+    if (cmd==='شركة'||cmd==='شركات') {
+      const freshUser = getUser(msg.author.id,msg.author.username);
+      const rows = [];
+      for (let page=0; page<2; page++) {
+        const row = new ActionRowBuilder();
+        COMPANIES_LIST.slice(page*5,page*5+5).forEach(c=>{
+          const canAfford = freshUser.cash>=c.price;
+          row.addComponents(new ButtonBuilder()
+            .setCustomId(`buy_co_${c.id}_${msg.author.id}`)
+            .setLabel(`${c.name.replace(/[☕🏪🍕🏋️🏬⚙️🏢🏭🌐👑]/g,'').trim()} ${fmt(c.price)}`)
+            .setStyle(canAfford?ButtonStyle.Success:ButtonStyle.Secondary).setDisabled(!canAfford));
+        });
+        rows.push(row);
       }
-    )
-    .setFooter({ text: `ID: ${postId.slice(-6)} • جميع العمليات داخل السيرفر فقط 🔒`, iconURL: client.user.displayAvatarURL() })
-    .setTimestamp();
+      const myCosForUpgrade = db.prepare('SELECT * FROM companies WHERE owner_id=? AND level < 10').all(msg.author.id);
+      if (myCosForUpgrade.length>0) {
+        const upRow = new ActionRowBuilder();
+        myCosForUpgrade.slice(0,5).forEach(co=>{
+          const cDef = COMPANIES_LIST.find(c=>c.id===co.company_id);
+          const req = COMPANY_UPGRADE_REQ[co.level-1];
+          const canUp = hasEnoughResources(msg.author.id, req);
+          upRow.addComponents(new ButtonBuilder()
+            .setCustomId(`upgrade_co_${co.id}_${msg.author.id}`)
+            .setLabel(`⬆️ ${cDef?.name.replace(/[☕🏪🍕🏋️🏬⚙️🏢🏭🌐👑]/g,'').trim()} Lv${co.level}→${co.level+1}`)
+            .setStyle(canUp?ButtonStyle.Primary:ButtonStyle.Secondary).setDisabled(!canUp));
+        });
+        rows.push(upRow);
+      }
+      const embed = new EmbedBuilder().setTitle('🏢 سوق الشركات').setColor('#27ae60')
+        .setDescription(COMPANIES_LIST.map(c=>`${c.name} \`[${c.id}]\` — 💰 ${fmt(c.price)} | 📊 ${c.sector} | 📈 ${fmt(Math.floor(c.price*COMPANY_INCOME_RATE))}/دقيقة`).join('\n'))
+        .setFooter({text:`رصيدك: ${fmt(freshUser.cash)} | اضغط للشراء الفوري`});
+      return msg.reply({embeds:[embed], components:rows});
+    }
 
-  await ticketChannel.send({
-    content: `📣 <@${partyA}> <@${partyB}> <@&${MM_ROLE_ID}>`,
-    embeds: [ticketEmbed],
-    components: [new ActionRowBuilder().addComponents(
-      mkBtn(`complete_trade_${postId}`, '✅ تمت العملية', ButtonStyle.Success),
-      mkBtn(`cancel_trade_${postId}`,   '❌ إلغاء',       ButtonStyle.Danger),
-      mkBtn(`close_ticket_${postId}`,   '🔒 إغلاق',       ButtonStyle.Secondary)
-    )]
-  });
+    if (cmd==='شركاتي') {
+      const myCos = db.prepare('SELECT * FROM companies WHERE owner_id=?').all(msg.author.id);
+      if (myCos.length===0) return msg.reply('🏢 ماعندك شركات! اكتب `شركة` لعرض السوق');
+      const now = Date.now(); let desc='', totalIncome=0;
+      for (const co of myCos) {
+        const cDef = COMPANIES_LIST.find(c=>c.id===co.company_id);
+        const curVal = getCompanyValue(co);
+        const incomePerMin = Math.floor(curVal*COMPANY_INCOME_RATE);
+        totalIncome += incomePerMin;
+        const elapsedMin = (now-co.last_collected)/60000;
+        const pending = Math.floor(incomePerMin*elapsedMin);
+        desc += `**#${co.id} ${cDef?.name||co.company_id}** — مستوى ${co.level}/10\n💰 ${fmt(curVal)} | 📈 ${fmt(incomePerMin)}/د | ⏳ ${fmt(pending)}\n\n`;
+      }
+      return msg.reply({embeds:[new EmbedBuilder().setTitle(`🏢 شركات ${msg.author.username}`).setColor('#27ae60')
+        .setDescription(desc).addFields({name:'📈 إجمالي الدخل/د',value:fmt(totalIncome),inline:true})
+        .setFooter({text:'تحصيل_أرباح لجمع الدخل'})]});
+    }
 
-  const imgs = [];
-  const imgA = isTrade ? data.sellerImageUrl  : data.requestImageUrl;
-  const imgB = isTrade ? data.buyerImageUrl   : data.supplierImageUrl;
-  const lblA = isTrade ? `📷 صورة البائع — ${data.offerItem}`  : `📷 صورة الطلب — ${data.wantItem}`;
-  const lblB = isTrade ? `📷 صورة المشتري — ${data.buyerItem}` : `📷 صورة المورّد — ${data.supplierItem}`;
-  if (imgA) imgs.push(new EmbedBuilder().setColor('#FF6B35').setTitle(lblA).setImage(imgA));
-  if (imgB) imgs.push(new EmbedBuilder().setColor('#00B4D8').setTitle(lblB).setImage(imgB));
-  if (imgs.length) await ticketChannel.send({ embeds: imgs });
-}
-
-// ══════════════════════════════════════════════════════
-//  ✅  إتمام العملية
-// ══════════════════════════════════════════════════════
-async function completeTradeTicket(interaction, td) {
-  td.status = 'completed';
-  const isTrade = td.type === 'trade';
-  const pA = isTrade ? td.sellerId : td.requesterId, pB = isTrade ? td.buyerId : td.supplierId;
-  const nA = isTrade ? td.sellerName : td.requesterName, nB = isTrade ? td.buyerName : td.supplierName;
-
-  await interaction.reply({ embeds: [
-    new EmbedBuilder().setColor('#00FF7F').setTitle('🎉 تمت العملية بنجاح!')
-      .setDescription(`أكد الوسيط **${interaction.user.username}** إتمام العملية!`)
-      .addFields(
-        { name: isTrade ? '🧑‍💼 البائع'  : '🛒 الطالب',  value: `<@${pA}>`, inline: true },
-        { name: isTrade ? '🛒 المشتري' : '🎁 المورّد', value: `<@${pB}>`, inline: true },
-        { name: '🎁 الشي', value: isTrade ? td.offerItem : td.wantItem, inline: false }
-      ).setFooter({ text: `أشرف عليه: ${interaction.user.username}` }).setTimestamp()
-  ]});
-
-  for (const [uid, other] of [[pA, nB], [pB, nA]]) {
-    try {
-      const u = await client.users.fetch(uid);
-      await u.send({ embeds: [
-        new EmbedBuilder().setColor('#00FF7F').setTitle('✅ عمليتك اكتملت بنجاح!')
-          .setDescription('تم التأكيد من الوسيط. شكراً! 🎉')
-          .addFields(
-            { name: '🎁 الشي',        value: isTrade ? td.offerItem : td.wantItem, inline: true },
-            { name: '⚖️ الوسيط',     value: interaction.user.username,             inline: false },
-            { name: '👤 الطرف الآخر', value: other,                                inline: false }
-          ).setTimestamp()
-      ]});
-    } catch {}
-  }
-
-  // إرسال طلب تقييم للطرفين
-  const tradeDesc = isTrade
-    ? `تريد: ${td.offerItem} ↔ ${td.buyerItem}`
-    : `طلب: ${td.wantItem} ↔ ${td.supplierItem}`;
-  await sendRatingRequest(pA, pB, nB, tradeDesc);
-  await sendRatingRequest(pB, pA, nA, tradeDesc);
-
-  await interaction.channel.send('🔒 سيُغلق هذا التيكيت تلقائياً خلال **10 ثواني**...');
-  setTimeout(async () => {
-    try { await interaction.channel.delete(); } catch {}
-    activeTickets.delete(interaction.channel.id);
-    if (isTrade) activeTrades.delete(td.postId); else activeRequests.delete(td.postId);
-  }, 10000);
-}
-
-// ══════════════════════════════════════════════════════
-//  ❌  إلغاء العملية
-// ══════════════════════════════════════════════════════
-async function cancelTradeTicket(interaction, td) {
-  td.status = 'cancelled';
-  const isTrade = td.type === 'trade';
-  const pA = isTrade ? td.sellerId : td.requesterId, pB = isTrade ? td.buyerId : td.supplierId;
-
-  await interaction.reply({ embeds: [
-    new EmbedBuilder().setColor('#FF0000').setTitle('❌ تم إلغاء العملية')
-      .setDescription(`ألغى الوسيط **${interaction.user.username}** هذه العملية.`)
-      .addFields(
-        { name: isTrade ? '🧑‍💼 البائع'  : '🛒 الطالب',  value: `<@${pA}>`, inline: true },
-        { name: isTrade ? '🛒 المشتري' : '🎁 المورّد', value: `<@${pB}>`, inline: true }
-      ).setTimestamp()
-  ]});
-
-  for (const uid of [pA, pB]) {
-    try {
-      const u = await client.users.fetch(uid);
-      await u.send({ embeds: [
-        new EmbedBuilder().setColor('#FF0000').setTitle('❌ تم إلغاء عمليتك')
-          .setDescription('قرر الوسيط إلغاء العملية. تواصل مع الإدارة إذا عندك مشكلة.').setTimestamp()
-      ]});
-    } catch {}
-  }
-
-  await interaction.channel.send('🔒 سيُغلق هذا التيكيت تلقائياً خلال **10 ثواني**...');
-  setTimeout(async () => {
-    try { await interaction.channel.delete(); } catch {}
-    activeTickets.delete(interaction.channel.id);
-    if (isTrade) activeTrades.delete(td.postId); else activeRequests.delete(td.postId);
-  }, 10000);
-}
-
-// ══════════════════════════════════════════════════════
-//  ❓  المساعدة
-// ══════════════════════════════════════════════════════
-async function handleHelp(message) {
-  await message.channel.send({ embeds: [
-    new EmbedBuilder().setColor('#5865F2')
-      .setTitle('📖 مساعدة البوت — Steal a Brainrot Trading v4')
-      .addFields(
-        {
-          name: '📌 الأوامر المتاحة',
-          value:
-            '`!تريد` — القائمة الرئيسية (إنشاء تريد أو طلب)\n' +
-            '`!طلب` — إنشاء طلب مباشرة\n' +
-            '`!تريداتي` — تريداتك + إعادة نشر + عروض\n' +
-            '`!طلباتي` — طلباتك + إعادة نشر + عروض\n' +
-            '`!مساعدة` — هذه القائمة',
-          inline: false
-        },
-        {
-          name: '🔄 الفرق بين التريد والطلب',
-          value: '**تريد** — عندك Brainrot وتبي تبادله\n**طلب** — تبي Brainrot معين وعندك ما تعرضه مقابله',
-          inline: false
-        },
-        {
-          name: '💬 نظام العروض المتعددة',
-          value:
-            '• أي شخص يضغط **"💬 تقديم عرض"** ويدخل معلومات ما عنده + صورة\n' +
-            '• صاحب التريد/الطلب يوصله **DM فوري** بكل عرض جديد\n' +
-            '• يضغط **"👁️ عروضي"** ليشوف كل العروض مرة وحدة\n' +
-            '• **✅ قبول** → تيكيت وسيط + DM للمقدّم\n' +
-            '• **❌ رفض** → DM للمرفوض + التريد يبقى مفتوح',
-          inline: false
-        },
-        {
-          name: '🔄 إعادة النشر',
-          value:
-            '• اكتب `!تريداتي` أو `!طلباتي` لتشوف منشوراتك\n' +
-            '• اضغط **"🔄 إعادة نشر"** لإعادة نشر أي منشور بدون ما تكتب من جديد\n' +
-            '• أو اضغط الزر مباشرة من داخل المنشور في القناة',
-          inline: false
-        },
-        {
-          name: '🖼️ نظام الصور',
-          value:
-            '• عند إنشاء تريد/طلب → أرسل صورة أو اكتب `skip`\n' +
-            '• عند تقديم عرض → أرسل صورة عرضك أو اكتب `skip`\n' +
-            '• الصور تظهر في التريد وفي تيكيت الوسيط',
-          inline: false
-        },
-        {
-          name: '⚖️ نظام الوسيط',
-          value:
-            '• عند قبول عرض → تيكيت خاص ينفتح تلقائياً\n' +
-            '• فقط البائع/الطالب + المشتري/المورّد + رول الوسيط يشوفون التيكيت\n' +
-            '• الوسيط يشرف ويضغط ✅ تمت / ❌ إلغاء\n' +
-            '• بعد الإتمام أو الإلغاء → **DM** للطرفين تلقائياً 🔒',
-          inline: false
+    if (cmd==='تحصيل_أرباح') {
+      const myCos = db.prepare('SELECT * FROM companies WHERE owner_id=?').all(msg.author.id);
+      if (myCos.length===0) return msg.reply('🏢 ماعندك شركات!');
+      const now = Date.now(); let total=0; const details=[];
+      for (const co of myCos) {
+        const cDef = COMPANIES_LIST.find(c=>c.id===co.company_id);
+        const curVal = getCompanyValue(co);
+        const incomePerMin = Math.floor(curVal*COMPANY_INCOME_RATE);
+        const elapsedMin = (now-co.last_collected)/60000;
+        const earned = Math.floor(incomePerMin*elapsedMin);
+        if (earned>0) {
+          total += earned;
+          details.push(`${cDef?.name||co.company_id} → ${fmt(earned)}`);
+          db.prepare('UPDATE companies SET last_collected=? WHERE id=?').run(now,co.id);
         }
-      )
-      .setFooter({ text: 'Steal a Brainrot Trading Bot v4 — آمن 100% داخل السيرفر' })
-      .setTimestamp()
-  ]});
-}
-
-// ══════════════════════════════════════════════════════
-//  🛠️  بنّاءو الـ Modals
-// ══════════════════════════════════════════════════════
-function buildTradeModal(userId) {
-  return new ModalBuilder()
-    .setCustomId(`trade_submit_${userId}`)
-    .setTitle('🔄 تريد جديد — Steal a Brainrot')
-    .addComponents(
-      r(inp('offer_item', '🎁 اسم الـ Brainrot اللي تعرضه',  'مثال: Tralalero Tralala (Legendary)', true)),
-      r(inp('want_item',  '💰 الشي اللي تبيه مقابله',         'مثال: Bombardiro Crocodilo',           true)),
-      r(inp('income',     '💵 الدخل بالثانية',                'مثال: 1,250/sec',                      true)),
-      r(inp('upgrades',   '⬆️ التطويرات',                    'مثال: Max | 5/10 | None',               true)),
-      r(inp('notes',      '📝 ملاحظات إضافية (اختياري)',      'شروط التريد أو أي تفاصيل...',           false, true))
-    );
-}
-
-function buildRequestModal(userId) {
-  return new ModalBuilder()
-    .setCustomId(`request_submit_${userId}`)
-    .setTitle('🛒 طلب جديد — Steal a Brainrot')
-    .addComponents(
-      r(inp('want_item',    '🎯 اسم الـ Brainrot اللي تبيه',     'مثال: Tralalero Tralala',    true)),
-      r(inp('want_details', '📋 تفاصيل الطلب (رانك، نوع، إلخ)', 'مثال: Legendary فقط بـ Max', true)),
-      r(inp('offer_item',   '🎁 الشي اللي عندك مقابله',           'مثال: Bombardiro Crocodilo', true)),
-      r(inp('offer_income', '💵 دخل ما عندك / ميزانيتك',         'مثال: 800/sec',              true)),
-      r(inp('notes',        '📝 ملاحظات إضافية (اختياري)',        'أي شروط إضافية...',          false, true))
-    );
-}
-
-function buildOfferModal(postId, postType) {
-  return new ModalBuilder()
-    .setCustomId(`offer_submit_${postType}_${postId}`)
-    .setTitle(postType === 'trade' ? '💬 عرضك على التريد' : '💬 عرضك على الطلب')
-    .addComponents(
-      r(inp('offer_item',     '🎁 اسم الـ Brainrot اللي تعرضه', 'مثال: Cappuccino Assassino', true)),
-      r(inp('offer_income',   '💵 دخله بالثانية',               'مثال: 900/sec',              true)),
-      r(inp('offer_upgrades', '⬆️ تطويراته',                   'مثال: Max | 4/10 | None',    true)),
-      r(inp('offer_notes',    '📝 ملاحظات إضافية (اختياري)',    'أي تفاصيل...',               false, true))
-    );
-}
-
-// ══════════════════════════════════════════════════════
-//  🛠️  دوال مساعدة
-// ══════════════════════════════════════════════════════
-function inp(id, label, placeholder, required = true, paragraph = false) {
-  return new TextInputBuilder()
-    .setCustomId(id).setLabel(label)
-    .setStyle(paragraph ? TextInputStyle.Paragraph : TextInputStyle.Short)
-    .setPlaceholder(placeholder).setRequired(required)
-    .setMaxLength(paragraph ? 200 : 100);
-}
-
-function r(component)            { return new ActionRowBuilder().addComponents(component); }
-function mkBtn(id, label, style) { return new ButtonBuilder().setCustomId(id).setLabel(label).setStyle(style); }
-
-function imgRequestEmbed(title) {
-  return new EmbedBuilder().setColor('#FFD700').setTitle(title)
-    .setDescription('أرسل الصورة مباشرة في هذي القناة.\n> اكتب `skip` لتخطي هذي الخطوة')
-    .setTimestamp();
-}
-
-async function extractImage(message) {
-  if (message.content.toLowerCase() === 'skip') {
-    try { await message.delete(); } catch {}
-    return null;
-  }
-  if (message.attachments.size > 0) {
-    const att = message.attachments.first();
-    if (att.contentType?.startsWith('image/')) {
-      if (IMAGE_STORAGE_CHANNEL_ID) {
-        try {
-          const storageChannel = client.channels.cache.get(IMAGE_STORAGE_CHANNEL_ID);
-          if (storageChannel) {
-            const stored = await storageChannel.send({ files: [{ attachment: att.url, name: att.name }] });
-            try { await message.delete(); } catch {}
-            return stored.attachments.first()?.url || att.url;
-          }
-        } catch {}
       }
-      return att.url;
+      if (total===0) return msg.reply('⏰ ما تراكم شيء بعد!');
+      db.prepare('UPDATE users SET cash=cash+? WHERE id=?').run(total,msg.author.id);
+      return msg.reply({embeds:[new EmbedBuilder().setTitle('💰 تم تحصيل الأرباح!').setColor('#27ae60')
+        .setDescription(details.slice(0,5).join('\n')).addFields({name:'💰 الإجمالي',value:fmt(total)})]});
     }
-    try { await message.delete(); } catch {}
-    try {
-      const u = await client.users.fetch(message.author.id);
-      await u.send({ content: '❌ الملف مو صورة! أرسل صورة صحيحة أو اكتب `skip`' });
-    } catch {}
-    return false;
-  }
-  try { await message.delete(); } catch {}
-  try {
-    const u = await client.users.fetch(message.author.id);
-    await u.send({ content: '❌ أرسل صورة أو اكتب `skip` لتخطي هذي الخطوة' });
-  } catch {}
-  return false;
-}
 
+    if (cmd==='بيع_شركة') {
+      const coId = parseInt(args[0]);
+      if (isNaN(coId)) return msg.reply('❌ `بيع_شركة [رقم]`');
+      const co = db.prepare('SELECT * FROM companies WHERE id=? AND owner_id=?').get(coId,msg.author.id);
+      if (!co) return msg.reply('❌ الشركة غير موجودة!');
+      const curVal = getCompanyValue(co), sellPrice = Math.floor(curVal*0.70);
+      db.prepare('DELETE FROM companies WHERE id=?').run(co.id);
+      db.prepare('UPDATE users SET cash=cash+? WHERE id=?').run(sellPrice,msg.author.id);
+      return msg.reply({embeds:[new EmbedBuilder().setTitle('💸 تم البيع').setColor('#ffd700').setDescription(`استلمت **${fmt(sellPrice)}** (70%)`)]});
+    }
 
-// ══════════════════════════════════════════════════════
-//  ⭐  نظام التقييم والسمعة
-// ══════════════════════════════════════════════════════
+    // ==========================
+    // الموارد + التصنيع
+    // ==========================
+    if (cmd==='موارد') {
+      const desc = Object.entries(RAW_RESOURCES).map(([n,r])=>`${r.emoji} **${n}** — ${fmt(r.price)}/وحدة`).join('\n');
+      return msg.reply({embeds:[new EmbedBuilder().setTitle('📦 أسعار الموارد الخام').setColor('#e67e22').setDescription(desc)]});
+    }
 
-// حساب متوسط التقييم
-function getReputation(userId) {
-  const rep = userReputations.get(userId);
-  if (!rep || rep.count === 0) return null;
-  return {
-    avg:   (rep.total / rep.count).toFixed(1),
-    count: rep.count,
-    stars: getStars(rep.total / rep.count)
-  };
-}
-
-function getStars(avg) {
-  const full  = Math.round(avg);
-  return '⭐'.repeat(full) + '☆'.repeat(5 - full);
-}
-
-// بناء نص السمعة للـ Embed
-function reputationField(userId) {
-  const rep = getReputation(userId);
-  if (!rep) return '🆕 جديد — لا يوجد تقييم بعد';
-  return `${rep.stars} ${rep.avg}/5 (${rep.count} تقييم)`;
-}
-
-// إرسال طلب التقييم بعد اكتمال التريد
-async function sendRatingRequest(userId, targetId, targetName, tradeDesc) {
-  pendingRatings.set(userId, { targetId, targetName, tradeDesc });
-  try {
-    const user = await client.users.fetch(userId);
-    await user.send({
-      embeds: [
-        new EmbedBuilder()
-          .setColor('#FFD700')
-          .setTitle('⭐ قيّم التريد!')
-          .setDescription(
-            `كيف كانت تجربتك مع **${targetName}**؟
-` +
-            `> ${tradeDesc}
-
-` +
-            'اضغط على التقييم المناسب:'
-          )
-          .setTimestamp()
-      ],
-      components: [
-        new ActionRowBuilder().addComponents(
-          mkBtn(`rate_${targetId}__1`, '1 ⭐',  ButtonStyle.Danger),
-          mkBtn(`rate_${targetId}__2`, '2 ⭐⭐', ButtonStyle.Danger),
-          mkBtn(`rate_${targetId}__3`, '3 ⭐⭐⭐', ButtonStyle.Secondary),
-          mkBtn(`rate_${targetId}__4`, '4 ⭐⭐⭐⭐', ButtonStyle.Success)
-        ),
-        new ActionRowBuilder().addComponents(
-          mkBtn(`rate_${targetId}__5`, '5 ⭐⭐⭐⭐⭐', ButtonStyle.Success),
-          mkBtn(`rate_skip_${targetId}`, '⏭️ تخطي', ButtonStyle.Secondary)
-        )
-      ]
-    });
-  } catch {}
-}
-
-// معالجة ضغطة زر التقييم (في DM)
-async function handleRatingButton(interaction) {
-  const id = interaction.customId;
-
-  if (id.startsWith('rate_skip_')) {
-    pendingRatings.delete(interaction.user.id);
-    return interaction.update({ embeds: [
-      new EmbedBuilder().setColor('#888888')
-        .setTitle('⏭️ تم تخطي التقييم').setTimestamp()
-    ], components: [] });
-  }
-
-  if (id.startsWith('rate_')) {
-    const parts    = id.replace('rate_', '').split('__');
-    const targetId = parts[0];
-    const stars    = parseInt(parts[1]);
-
-    const pending = pendingRatings.get(interaction.user.id);
-    if (!pending || pending.targetId !== targetId)
-      return interaction.reply({ content: '❌ انتهت صلاحية هذا التقييم!', ephemeral: true });
-
-    // تسجيل التقييم
-    if (!userReputations.has(targetId))
-      userReputations.set(targetId, { total: 0, count: 0, history: [] });
-    const rep = userReputations.get(targetId);
-    rep.total += stars;
-    rep.count += 1;
-    rep.history.push({ from: interaction.user.id, stars, date: new Date() });
-    userReputations.set(targetId, rep);
-    pendingRatings.delete(interaction.user.id);
-
-    const newAvg = (rep.total / rep.count).toFixed(1);
-
-    await interaction.update({ embeds: [
-      new EmbedBuilder().setColor('#00FF7F')
-        .setTitle('✅ تم حفظ تقييمك!')
-        .setDescription(`أعطيت **${pending.targetName}** ${getStars(stars)} (${stars}/5)
-متوسطه الحالي: ${getStars(parseFloat(newAvg))} ${newAvg}/5`)
-        .setTimestamp()
-    ], components: [] });
-
-    // إشعار المُقيَّم
-    try {
-      const target = await client.users.fetch(targetId);
-      await target.send({ embeds: [
-        new EmbedBuilder().setColor('#FFD700')
-          .setTitle('⭐ وصلك تقييم جديد!')
-          .setDescription(`قيّمك أحد بـ ${getStars(stars)} (${stars}/5)
-متوسطك الحالي: **${newAvg}/5** من ${rep.count} تقييم`)
-          .setTimestamp()
-      ]});
-    } catch {}
-  }
-}
-
-// ══════════════════════════════════════════════════════
-//  🔔  تنبيه الوسطاء (بعد 10 دقايق بدون رد)
-// ══════════════════════════════════════════════════════
-async function scheduleMMReminder(ticketChannelId, postId) {
-  setTimeout(async () => {
-    // لو التيكيت لا زال pending
-    const td = activeTickets.get(ticketChannelId);
-    if (!td || td.status !== 'pending') return;
-
-    try {
-      const ch = client.channels.cache.get(ticketChannelId);
-      if (!ch) return;
-      await ch.send({
-        content: `🔔 <@&${MM_ROLE_ID}> **تذكير!** هذا التيكيت مفتوح منذ **10 دقايق** ولم يُعالَج بعد — يرجى المتابعة!`,
-        embeds: [
-          new EmbedBuilder()
-            .setColor('#FF4444')
-            .setTitle('⚠️ تيكيت بانتظار الوسيط')
-            .setDescription('لم يستجب أي وسيط لهذا التيكيت منذ 10 دقايق.')
-            .setTimestamp()
-        ]
+    if (cmd==='سوق_موارد') {
+      const freshUser = getUser(msg.author.id,msg.author.username);
+      const names = Object.keys(RAW_RESOURCES);
+      const row1 = new ActionRowBuilder(), row2 = new ActionRowBuilder();
+      names.slice(0,3).forEach(n=>{
+        const r = RAW_RESOURCES[n];
+        row1.addComponents(new ButtonBuilder().setCustomId(`askres_${n}_${msg.author.id}`).setLabel(`${r.emoji} ${n} — ${fmt(r.price)}`).setStyle(ButtonStyle.Primary));
       });
-    } catch {}
-  }, 10 * 60 * 1000); // 10 دقايق
+      names.slice(3).forEach(n=>{
+        const r = RAW_RESOURCES[n];
+        row2.addComponents(new ButtonBuilder().setCustomId(`askres_${n}_${msg.author.id}`).setLabel(`${r.emoji} ${n} — ${fmt(r.price)}`).setStyle(ButtonStyle.Primary));
+      });
+      const embed = new EmbedBuilder().setTitle('🏪 سوق الموارد الخام').setColor('#e67e22')
+        .setFooter({text:`رصيدك: ${fmt(freshUser.cash)} | اضغط على المادة ثم اكتب الكمية`});
+      return msg.reply({embeds:[embed], components:[row1,row2]});
+    }
+
+    if (cmd==='مخزوني') {
+      const res = db.prepare('SELECT * FROM resources WHERE owner_id=? AND quantity>0').all(msg.author.id);
+      if (res.length===0) return msg.reply('📦 مخزونك فاضي!');
+      const desc = res.map(r=>{
+        const info = RAW_RESOURCES[r.name]||COMPONENTS[r.name]||PRODUCTS[r.name];
+        return `${info?.emoji||'📦'} **${r.name}**: ${r.quantity.toLocaleString()}`;
+      }).join('\n');
+      return msg.reply({embeds:[new EmbedBuilder().setTitle(`📦 مخزون ${msg.author.username}`).setColor('#e67e22').setDescription(desc)]});
+    }
+
+    if (cmd==='تصنيع') {
+      const itemName = args[0], qty = parseInt(args[1])||1;
+      const isComponent = COMPONENTS[itemName], isProduct = PRODUCTS[itemName];
+      const item = isComponent || isProduct;
+      if (!item) return msg.reply(`❌ عنصر غير معروف!\nمكونات: ${Object.keys(COMPONENTS).join(' | ')}\nمنتجات: ${Object.keys(PRODUCTS).join(' | ')}`);
+      const totalReq = {};
+      for (const [n,v] of Object.entries(item.requires)) totalReq[n] = v*qty;
+      if (!hasEnoughResources(msg.author.id, totalReq)) {
+        const missing = Object.entries(totalReq).map(([n,v])=>{
+          const have = getResource(msg.author.id,n);
+          return `${n}: تحتاج ${v} عندك ${have?.quantity||0}`;
+        }).join('\n');
+        return msg.reply({embeds:[new EmbedBuilder().setTitle('❌ مواد ناقصة').setColor('#e74c3c').setDescription(missing)]});
+      }
+      for (const [n,v] of Object.entries(totalReq)) removeResource(msg.author.id, n, v);
+      addResource(msg.author.id, itemName, qty);
+      return msg.reply({embeds:[new EmbedBuilder().setTitle(`✅ صنّعت ${item.emoji} ${itemName} ×${qty}`).setColor('#27ae60')]});
+    }
+
+    if (cmd==='بيع_منتج') {
+      const itemName = args[0], qty = parseInt(args[1]);
+      const item = PRODUCTS[itemName];
+      if (!item) return msg.reply(`❌ منتج غير معروف! المنتجات: ${Object.keys(PRODUCTS).join(' | ')}`);
+      if (isNaN(qty)||qty<=0) return msg.reply('❌ حدد الكمية!');
+      const have = getResource(msg.author.id, itemName);
+      if (!have||have.quantity<qty) return msg.reply(`❌ ماعندك ${qty} ${itemName}!`);
+      const traderBonus = user.career==='تاجر' ? 1.15 : 1.0;
+      const revenue = Math.floor(item.sellPrice*qty*traderBonus);
+      removeResource(msg.author.id, itemName, qty);
+      db.prepare('UPDATE users SET cash=cash+? WHERE id=?').run(revenue,msg.author.id);
+      return msg.reply({embeds:[new EmbedBuilder().setTitle(`💰 بعت ${item.emoji} ${itemName} ×${qty}`).setColor('#00ff88')
+        .setDescription(`استلمت **${fmt(revenue)}**${user.career==='تاجر'?' (بونص تاجر +15%)':''}`)]});
+    }
+
+    // ==========================
+    // سوق الأسهم
+    // ==========================
+    if (cmd==='الأسهم'||cmd==='اسهم') {
+      const stocks = db.prepare('SELECT * FROM stocks').all();
+      const desc = stocks.map(s=>`**${s.symbol}** ${s.company_name} — 💰 ${fmt(s.price)}/سهم`).join('\n');
+      return msg.reply({embeds:[new EmbedBuilder().setTitle('📈 سوق الأسهم').setColor('#3498db')
+        .setDescription(desc).setFooter({text:'شراء_سهم [رمز] [كمية] | بيع_سهم [رمز] [كمية]'})]});
+    }
+
+    if (cmd==='شراء_سهم') {
+      const symbol = args[0]?.toUpperCase(), qty = parseInt(args[1]);
+      const stock = db.prepare('SELECT * FROM stocks WHERE symbol=?').get(symbol);
+      if (!stock) return msg.reply('❌ رمز غير موجود! اكتب `الأسهم`');
+      if (isNaN(qty)||qty<=0) return msg.reply('❌ حدد الكمية!');
+      const cost = stock.price*qty;
+      if (user.cash<cost) return msg.reply(`❌ تحتاج **${fmt(cost)}**`);
+      db.prepare('UPDATE users SET cash=cash-? WHERE id=?').run(cost,msg.author.id);
+      const existing = db.prepare('SELECT * FROM user_stocks WHERE owner_id=? AND symbol=?').get(msg.author.id,symbol);
+      if (existing) db.prepare('UPDATE user_stocks SET shares=shares+? WHERE owner_id=? AND symbol=?').run(qty,msg.author.id,symbol);
+      else db.prepare('INSERT INTO user_stocks (owner_id,symbol,shares) VALUES (?,?,?)').run(msg.author.id,symbol,qty);
+      // ضغط شراء يرفع السعر قليلاً
+      const newPrice = Math.floor(stock.price*(1+0.001*qty));
+      db.prepare('UPDATE stocks SET price=? WHERE symbol=?').run(Math.min(newPrice,stock.price*3),symbol);
+      return msg.reply({embeds:[new EmbedBuilder().setTitle(`✅ اشتريت ${qty} سهم ${symbol}`).setColor('#00ff88').setDescription(`التكلفة: **${fmt(cost)}**`)]});
+    }
+
+    if (cmd==='بيع_سهم') {
+      const symbol = args[0]?.toUpperCase(), qty = parseInt(args[1]);
+      const stock = db.prepare('SELECT * FROM stocks WHERE symbol=?').get(symbol);
+      if (!stock) return msg.reply('❌ رمز غير موجود!');
+      const holding = db.prepare('SELECT * FROM user_stocks WHERE owner_id=? AND symbol=?').get(msg.author.id,symbol);
+      if (!holding||holding.shares<qty) return msg.reply(`❌ ماعندك ${qty} سهم ${symbol}!`);
+      const revenue = stock.price*qty;
+      db.prepare('UPDATE user_stocks SET shares=shares-? WHERE owner_id=? AND symbol=?').run(qty,msg.author.id,symbol);
+      db.prepare('UPDATE users SET cash=cash+? WHERE id=?').run(revenue,msg.author.id);
+      // ضغط بيع يخفض السعر قليلاً
+      const newPrice = Math.floor(stock.price*(1-0.001*qty));
+      db.prepare('UPDATE stocks SET price=? WHERE symbol=?').run(Math.max(newPrice,Math.floor(stock.price*0.3)),symbol);
+      return msg.reply({embeds:[new EmbedBuilder().setTitle(`💰 بعت ${qty} سهم ${symbol}`).setColor('#ffd700').setDescription(`استلمت **${fmt(revenue)}**`)]});
+    }
+
+    if (cmd==='محفظتي') {
+      const holdings = db.prepare('SELECT * FROM user_stocks WHERE owner_id=? AND shares>0').all(msg.author.id);
+      if (holdings.length===0) return msg.reply('📈 محفظتك فاضية!');
+      let totalVal = 0;
+      const desc = holdings.map(h=>{
+        const stock = db.prepare('SELECT * FROM stocks WHERE symbol=?').get(h.symbol);
+        const val = stock.price*h.shares; totalVal += val;
+        return `**${h.symbol}** ${stock.company_name}: ${h.shares} سهم — ${fmt(val)}`;
+      }).join('\n');
+      return msg.reply({embeds:[new EmbedBuilder().setTitle('📈 محفظتك الاستثمارية').setColor('#3498db')
+        .setDescription(desc).addFields({name:'💰 القيمة الإجمالية',value:fmt(totalVal)})]});
+    }
+
+    // ==========================
+    // التخريب التجاري (بديل السرقة) + الدعاوى
+    // ==========================
+    if (cmd==='تخريب') {
+      const left = cooldownLeft(user,'تخريب'); if(left>0) return msg.reply(`⏰ انتظر **${fmtTime(left)}**`);
+      const target = msg.mentions.users.first();
+      if (!target) return msg.reply('❌ `تخريب @شخص`');
+      if (target.id===msg.author.id) return msg.reply('❌ ما تقدر تخرب على نفسك!');
+      const victim = db.prepare('SELECT * FROM users WHERE id=?').get(target.id);
+      if (!victim||victim.cash<500) return msg.reply('😅 ماعنده نقد كافي!');
+      if (victim.protection_until>Date.now()) { db.prepare('UPDATE users SET credit_score=MAX(0,credit_score-5) WHERE id=?').run(msg.author.id); return msg.reply(`🛡 **${target.username}** محمي! -5 ائتمان`); }
+      const success = Math.random()>0.50;
+      db.prepare('UPDATE users SET last_sabotage=? WHERE id=?').run(Date.now(),msg.author.id);
+      if (success) {
+        const stolen = Math.floor(Math.random()*victim.cash*0.10)+50;
+        db.prepare('UPDATE users SET cash=cash+?,credit_score=MAX(0,credit_score-10) WHERE id=?').run(stolen,msg.author.id);
+        db.prepare('UPDATE users SET cash=MAX(0,cash-?) WHERE id=?').run(stolen,target.id);
+        db.prepare('INSERT INTO sabotage_log (saboteur_id,victim_id,amount) VALUES (?,?,?)').run(msg.author.id,target.id,stolen);
+        try { client.users.fetch(target.id).then(u=>u.send(`💥 **تعرضت لتخريب تجاري!**\n**${msg.author.username}** سرق منك **${fmt(stolen)}**`).catch(()=>{})).catch(()=>{}); } catch(e){}
+        return msg.reply({embeds:[new EmbedBuilder().setTitle('💥 نجح التخريب!').setColor('#ffd700').setDescription(`ربحت **${fmt(stolen)}** من ${target.username}`).setFooter({text:'-10 ائتمان'})]});
+      } else {
+        const fine = Math.floor(user.cash*0.10);
+        db.prepare('UPDATE users SET cash=MAX(0,cash-?),credit_score=MAX(0,credit_score-15) WHERE id=?').run(fine,msg.author.id);
+        db.prepare('UPDATE treasury SET amount=amount+? WHERE id=1').run(fine);
+        return msg.reply({embeds:[new EmbedBuilder().setTitle('🚨 تم اكتشافك!').setColor('#e74c3c').setDescription(`دفعت غرامة **${fmt(fine)}** و -15 ائتمان`)]});
+      }
+    }
+
+    if (cmd==='دعوى') {
+      const target = msg.mentions.users.first();
+      if (!target) return msg.reply('❌ `دعوى @الشخص`');
+      const record = db.prepare('SELECT * FROM sabotage_log WHERE saboteur_id=? AND victim_id=? ORDER BY at DESC LIMIT 1').get(target.id,msg.author.id);
+      if (!record) return msg.reply('❌ ما يوجد سجل تخريب ضدك من هذا الشخص!');
+      const existing = db.prepare("SELECT * FROM lawsuits WHERE plaintiff_id=? AND defendant_id=? AND status='open'").get(msg.author.id,target.id);
+      if (existing) return msg.reply('⚠️ عندك دعوى مفتوحة على هذا الشخص!');
+      db.prepare('INSERT INTO lawsuits (plaintiff_id,defendant_id,claimed_amount) VALUES (?,?,?)').run(msg.author.id,target.id,record.amount);
+      const caseId = db.prepare('SELECT last_insert_rowid() as id').get().id;
+      const targetUser = db.prepare('SELECT * FROM users WHERE id=?').get(target.id);
+      const lawyerBonus = user.career==='محامي' ? 0.15 : 0;
+      const winChance = Math.min(0.85, 0.5+(100-targetUser.credit_score)*0.004+lawyerBonus);
+      const win = Math.random()<winChance;
+      const award = record.amount*3;
+      if (win) {
+        const actualPay = Math.min(award,(targetUser.cash||0)+(targetUser.bank||0));
+        db.prepare('UPDATE users SET cash=MAX(0,cash-?) WHERE id=?').run(Math.min(actualPay,targetUser.cash||0),target.id);
+        db.prepare('UPDATE users SET cash=cash+? WHERE id=?').run(actualPay,msg.author.id);
+        db.prepare("UPDATE lawsuits SET status='closed',verdict='plaintiff' WHERE id=?").run(caseId);
+        db.prepare('UPDATE users SET credit_score=MAX(0,credit_score-20) WHERE id=?').run(target.id);
+        db.prepare('DELETE FROM sabotage_log WHERE id=?').run(record.id);
+        return msg.reply({embeds:[new EmbedBuilder().setTitle('⚖️ ربحت الدعوى!').setColor('#00ff88')
+          .addFields({name:'💰 التعويض',value:fmt(actualPay),inline:true})]});
+      } else {
+        db.prepare("UPDATE lawsuits SET status='closed',verdict='defendant' WHERE id=?").run(caseId);
+        db.prepare('DELETE FROM sabotage_log WHERE id=?').run(record.id);
+        const fee = Math.floor(record.amount*0.1);
+        db.prepare('UPDATE users SET cash=MAX(0,cash-?) WHERE id=?').run(fee,msg.author.id);
+        db.prepare('UPDATE treasury SET amount=amount+? WHERE id=1').run(fee);
+        return msg.reply({embeds:[new EmbedBuilder().setTitle('⚖️ خسرت الدعوى!').setColor('#e74c3c').addFields({name:'💸 رسوم',value:fmt(fee),inline:true})]});
+      }
+    }
+
+    if (cmd==='دعاواي') {
+      const cases = db.prepare('SELECT * FROM lawsuits WHERE plaintiff_id=? OR defendant_id=? ORDER BY created_at DESC LIMIT 5').all(msg.author.id,msg.author.id);
+      if (cases.length===0) return msg.reply('📋 لا دعاوى!');
+      const desc = cases.map(c=>{
+        const role = c.plaintiff_id===msg.author.id?'مدعي':'مدعى عليه';
+        const status = c.status==='open'?'🟡 مفتوحة':c.verdict==='plaintiff'?'✅ فاز المدعي':'❌ رُفضت';
+        return `• ${role} — ${fmt(c.claimed_amount)} — ${status}`;
+      }).join('\n');
+      return msg.reply({embeds:[new EmbedBuilder().setTitle('⚖️ دعاواي').setColor('#3498db').setDescription(desc)]});
+    }
+
+    // ==========================
+    // التحالفات + الأسواق (حروب المناطق)
+    // ==========================
+    if (cmd==='تأسيس_تحالف') {
+      const name = args[0]; if (!name) return msg.reply('❌ `تأسيس_تحالف [اسم]`');
+      const existing = db.prepare('SELECT * FROM alliances WHERE leader_id=? OR member2_id=? OR member3_id=?').get(msg.author.id,msg.author.id,msg.author.id);
+      if (existing) return msg.reply('❌ أنت بالفعل في تحالف!');
+      if (db.prepare('SELECT * FROM alliances WHERE name=?').get(name)) return msg.reply('❌ الاسم مأخوذ!');
+      const cost = 80_000; if (user.cash<cost) return msg.reply(`❌ تحتاج **${fmt(cost)}**`);
+      db.prepare('UPDATE users SET cash=cash-? WHERE id=?').run(cost,msg.author.id);
+      db.prepare('INSERT INTO alliances (name,leader_id) VALUES (?,?)').run(name,msg.author.id);
+      return msg.reply({embeds:[new EmbedBuilder().setTitle('🤝 تم تأسيس التحالف!').setColor('#3498db')
+        .addFields({name:'🏴 الاسم',value:name,inline:true},{name:'👑 القائد',value:msg.author.username,inline:true})
+        .setFooter({text:'دعوة_تحالف @شخص للإضافة | سيطرة [رقم] للسيطرة على سوق'})]});
+    }
+    if (cmd==='دعوة_تحالف') {
+      const target = msg.mentions.users.first(); if (!target) return msg.reply('❌ `دعوة_تحالف @شخص`');
+      const alliance = db.prepare('SELECT * FROM alliances WHERE leader_id=?').get(msg.author.id);
+      if (!alliance) return msg.reply('❌ لست قائد تحالف!');
+      if (db.prepare('SELECT * FROM alliances WHERE leader_id=? OR member2_id=? OR member3_id=?').get(target.id,target.id,target.id)) return msg.reply('❌ الشخص في تحالف!');
+      const count = [alliance.leader_id,alliance.member2_id,alliance.member3_id].filter(Boolean).length;
+      if (count>=3) return msg.reply('❌ التحالف ممتلئ!');
+      if (!alliance.member2_id) db.prepare('UPDATE alliances SET member2_id=? WHERE id=?').run(target.id,alliance.id);
+      else db.prepare('UPDATE alliances SET member3_id=? WHERE id=?').run(target.id,alliance.id);
+      getUser(target.id,target.username);
+      return msg.reply(`✅ أضفت **${target.username}** للتحالف!`);
+    }
+    if (cmd==='تحالفي') {
+      const alliance = db.prepare('SELECT * FROM alliances WHERE leader_id=? OR member2_id=? OR member3_id=?').get(msg.author.id,msg.author.id,msg.author.id);
+      if (!alliance) return msg.reply('❌ لست في تحالف!');
+      const leader = db.prepare('SELECT username FROM users WHERE id=?').get(alliance.leader_id);
+      const markets = db.prepare('SELECT * FROM markets WHERE controlled_by=?').all(alliance.id);
+      return msg.reply({embeds:[new EmbedBuilder().setTitle(`🤝 تحالف ${alliance.name}`).setColor('#3498db')
+        .addFields({name:'👑 القائد',value:leader?.username||'?',inline:true},{name:'💰 الخزنة',value:fmt(alliance.treasury),inline:true},{name:'🏆 انتصارات',value:`${alliance.wins}`,inline:true},{name:'🗺️ الأسواق المسيطر عليها',value:markets.length>0?markets.map(m=>m.name).join('\n'):'لا يوجد',inline:false})]});
+    }
+    if (cmd==='مغادرة_تحالف') {
+      const alliance = db.prepare('SELECT * FROM alliances WHERE leader_id=? OR member2_id=? OR member3_id=?').get(msg.author.id,msg.author.id,msg.author.id);
+      if (!alliance) return msg.reply('❌ لست في تحالف!');
+      if (alliance.leader_id===msg.author.id) {
+        db.prepare('UPDATE users SET cash=cash+? WHERE id=?').run(alliance.treasury,msg.author.id);
+        db.prepare('UPDATE markets SET controlled_by=NULL WHERE controlled_by=?').run(alliance.id);
+        db.prepare('DELETE FROM alliances WHERE id=?').run(alliance.id);
+        return msg.reply('✅ تم حل التحالف');
+      } else {
+        if (alliance.member2_id===msg.author.id) db.prepare('UPDATE alliances SET member2_id=NULL WHERE id=?').run(alliance.id);
+        else db.prepare('UPDATE alliances SET member3_id=NULL WHERE id=?').run(alliance.id);
+        return msg.reply('✅ غادرت التحالف');
+      }
+    }
+    if (cmd==='أسواق'||cmd==='اسواق') {
+      const markets = db.prepare('SELECT * FROM markets').all();
+      const desc = markets.map(m=>{
+        const alliance = m.controlled_by ? db.prepare('SELECT name FROM alliances WHERE id=?').get(m.controlled_by) : null;
+        return `**#${m.id} ${m.name}** — 💰 ${fmt(m.income_per_hour)}/ساعة — ${alliance?`🏴 ${alliance.name}`:'🔓 غير مسيطر عليه'}`;
+      }).join('\n');
+      return msg.reply({embeds:[new EmbedBuilder().setTitle('🗺️ الأسواق المتاحة').setColor('#e74c3c')
+        .setDescription(desc).setFooter({text:'سيطرة [رقم] — للاستيلاء على سوق'})]});
+    }
+    if (cmd==='سيطرة') {
+      const marketId = parseInt(args[0]);
+      if (isNaN(marketId)) return msg.reply('❌ `سيطرة [رقم]`');
+      const alliance = db.prepare('SELECT * FROM alliances WHERE leader_id=? OR member2_id=? OR member3_id=?').get(msg.author.id,msg.author.id,msg.author.id);
+      if (!alliance) return msg.reply('❌ لازم تكون في تحالف!');
+      const market = db.prepare('SELECT * FROM markets WHERE id=?').get(marketId);
+      if (!market) return msg.reply('❌ سوق غير موجود!');
+      if (market.controlled_by===alliance.id) return msg.reply('✅ أنت مسيطر عليه بالفعل!');
+      const success = Math.random()>0.5;
+      if (success) {
+        db.prepare('UPDATE markets SET controlled_by=? WHERE id=?').run(alliance.id,marketId);
+        db.prepare('UPDATE alliances SET wins=wins+1 WHERE id=?').run(alliance.id);
+        return msg.reply({embeds:[new EmbedBuilder().setTitle('🏆 نجحت السيطرة!').setColor('#00ff88').setDescription(`تحالف **${alliance.name}** استولى على **${market.name}**!`)]});
+      } else {
+        return msg.reply('❌ فشلت محاولة السيطرة! حاول مرة أخرى بعدين');
+      }
+    }
+    if (cmd==='تحالفات') {
+      const top = db.prepare('SELECT * FROM alliances ORDER BY wins DESC LIMIT 5').all();
+      if (top.length===0) return msg.reply('🤝 لا يوجد تحالفات بعد!');
+      const desc = top.map((a,i)=>{
+        const leader = db.prepare('SELECT username FROM users WHERE id=?').get(a.leader_id);
+        return `${['🥇','🥈','🥉','4️⃣','5️⃣'][i]} **${a.name}** — قائد: ${leader?.username||'?'} | فوز: ${a.wins} | خزنة: ${fmt(a.treasury)}`;
+      }).join('\n');
+      return msg.reply({embeds:[new EmbedBuilder().setTitle('🤝 أقوى التحالفات').setColor('#e74c3c').setDescription(desc)]});
+    }
+
+    // ==========================
+    // العقود المؤقتة (استثمار مؤقت)
+    // ==========================
+    if (cmd==='عقد') {
+      const amount = parseAmount(args[0], user.cash);
+      if (isNaN(amount)||amount<10_000) return msg.reply('❌ `عقد [مبلغ] [المجال]` — الحد الأدنى 10K\nاكتب `المجالات` لعرض الخيارات');
+      if (user.cash<amount) return msg.reply('❌ نقدك ما يكفي!');
+      const existing = db.prepare("SELECT * FROM contracts WHERE user_id=? AND notified=0").get(msg.author.id);
+      if (existing) { const left=Math.max(0,existing.ends_at-Date.now()); return msg.reply(`⏰ عندك عقد نشط! ينتهي بعد **${fmtTime(left)}**`); }
+      const fieldName = args.slice(1).join(' ');
+      const field = fieldName ? CONTRACT_FIELDS.find(f=>f.name.includes(fieldName)) : CONTRACT_FIELDS[Math.floor(Math.random()*CONTRACT_FIELDS.length)];
+      if (fieldName && !field) return msg.reply('❌ مجال غير موجود! اكتب `المجالات`');
+      const selected = field || CONTRACT_FIELDS[0];
+      const riskProfiles = {
+        منخفض: [{r:'فشل',p:-0.35,c:10},{r:'خسارة',p:-0.12,c:35},{r:'عادي',p:0.02,c:25},{r:'جيد',p:0.10,c:20},{r:'ممتاز',p:0.25,c:8},{r:'استثنائي',p:0.50,c:2}],
+        متوسط: [{r:'فشل',p:-0.45,c:15},{r:'خسارة',p:-0.20,c:40},{r:'عادي',p:0.03,c:20},{r:'جيد',p:0.18,c:15},{r:'ممتاز',p:0.45,c:7},{r:'استثنائي',p:0.90,c:3}],
+        عالي:  [{r:'فشل',p:-0.65,c:20},{r:'خسارة',p:-0.30,c:45},{r:'عادي',p:0.04,c:10},{r:'جيد',p:0.25,c:12},{r:'ممتاز',p:0.70,c:8},{r:'استثنائي',p:1.30,c:5}],
+        خطر:   [{r:'فشل',p:-1.00,c:50},{r:'خسارة',p:-0.60,c:25},{r:'عادي',p:0.08,c:8},{r:'جيد',p:0.40,c:8},{r:'ممتاز',p:1.00,c:5},{r:'استثنائي',p:2.50,c:4}],
+      };
+      const profile = riskProfiles[selected.risk]||riskProfiles['متوسط'];
+      const totalC = profile.reduce((s,p)=>s+p.c,0);
+      let r=Math.random()*totalC, cum=0, chosen=profile[0];
+      for (const p of profile) { cum+=p.c; if(r<=cum){chosen=p;break;} }
+      const profit = Math.floor(amount*chosen.p*selected.bonus);
+      const endsAt = Date.now()+2*60*60*1000;
+      db.prepare('UPDATE users SET cash=cash-? WHERE id=?').run(amount,msg.author.id);
+      db.prepare('INSERT INTO contracts (user_id,amount,field,result,profit,started_at,ends_at) VALUES (?,?,?,?,?,?,?)').run(msg.author.id,amount,selected.name,chosen.r,profit,Date.now(),endsAt);
+      return msg.reply({embeds:[new EmbedBuilder().setTitle(`📝 بدأت ${selected.name}!`).setColor('#3498db')
+        .addFields({name:'💰 المبلغ',value:fmt(amount),inline:true},{name:'⚠️ الخطورة',value:selected.risk,inline:true},{name:'⏰ ينتهي بعد',value:'ساعتين',inline:true})
+        .setFooter({text:'اكتب: نتيجة_عقد بعد ساعتين'})]});
+    }
+    if (cmd==='المجالات') {
+      const desc = CONTRACT_FIELDS.map(f=>`${f.name} — ⚠️ ${f.risk} | ${f.desc}`).join('\n');
+      return msg.reply({embeds:[new EmbedBuilder().setTitle('📝 مجالات العقود').setColor('#3498db').setDescription(desc)]});
+    }
+    if (cmd==='نتيجة_عقد') {
+      const contract = db.prepare("SELECT * FROM contracts WHERE user_id=? AND notified=0").get(msg.author.id);
+      if (!contract) return msg.reply('❌ ماعندك عقد نشط!');
+      if (Date.now()<contract.ends_at) return msg.reply(`⏰ ارجع بعد **${fmtTime(contract.ends_at-Date.now())}**`);
+      db.prepare('UPDATE contracts SET notified=1 WHERE id=?').run(contract.id);
+      const netReturn = contract.profit>=0 ? contract.amount+contract.profit : Math.max(0,contract.amount-Math.abs(contract.profit));
+      db.prepare('UPDATE users SET cash=cash+? WHERE id=?').run(netReturn,msg.author.id);
+      return msg.reply({embeds:[new EmbedBuilder().setTitle(`📊 انتهى ${contract.field} — ${contract.result}!`).setColor(contract.profit>=0?'#00ff88':'#e74c3c')
+        .addFields({name:'💰 المستثمر',value:fmt(contract.amount),inline:true},{name:contract.profit>=0?'📈 الربح':'📉 الخسارة',value:fmt(Math.abs(contract.profit)),inline:true},{name:'✅ استلمت',value:fmt(netReturn),inline:true})]});
+    }
+    if (cmd==='عقدي') {
+      const contract = db.prepare("SELECT * FROM contracts WHERE user_id=? AND notified=0").get(msg.author.id);
+      if (!contract) return msg.reply('📝 ماعندك عقد نشط. اكتب `عقد [مبلغ]`');
+      const left = Math.max(0,contract.ends_at-Date.now());
+      return msg.reply({embeds:[new EmbedBuilder().setTitle('📝 عقدي الحالي').setColor('#3498db')
+        .addFields({name:'المجال',value:contract.field,inline:true},{name:'الحالة',value:left<=0?'✅ جاهز':`⏳ ${fmtTime(left)}`,inline:true})]});
+    }
+
+    // ==========================
+    // صناديق المكافآت
+    // ==========================
+    if (cmd==='صناديق') {
+      const desc = Object.entries(REWARD_BOXES).map(([n,b])=>{
+        const max = Math.max(...b.prizes.map(p=>p.value));
+        return `${b.emoji} **${n}** — 💰 ${fmt(b.price)} | 🏆 أعلى جائزة: ${fmt(max)}`;
+      }).join('\n');
+      return msg.reply({embeds:[new EmbedBuilder().setTitle('🎁 صناديق المكافآت').setColor('#9b59b6')
+        .setDescription(desc).setFooter({text:'فتح_صندوق [عادي/فضي/ذهبي]'})]});
+    }
+    if (cmd==='فتح_صندوق') {
+      const boxType = args[0];
+      const box = REWARD_BOXES[boxType];
+      if (!box) return msg.reply(`❌ الأنواع: ${Object.keys(REWARD_BOXES).map(k=>`\`${k}\``).join(' | ')}`);
+      const left = Math.max(0, 3*60*60*1000-(Date.now()-(user.last_lootbox||0)));
+      if (left>0) return msg.reply(`⏰ الصندوق القادم بعد **${fmtTime(left)}**`);
+      if (user.cash<box.price) return msg.reply(`❌ تحتاج **${fmt(box.price)}**`);
+      db.prepare('UPDATE users SET cash=cash-?, last_lootbox=? WHERE id=?').run(box.price,Date.now(),msg.author.id);
+      const prize = rollPrize(box.prizes);
+      let gained=0;
+      if (prize.type==='money') { gained=prize.value; db.prepare('UPDATE users SET cash=cash+? WHERE id=?').run(gained,msg.author.id); }
+      else if (prize.type==='protection') { const until=Date.now()+prize.value*3600000; db.prepare('UPDATE users SET protection_until=? WHERE id=?').run(until,msg.author.id); }
+      db.prepare('INSERT INTO reward_boxes (user_id,box_type,prize,prize_value) VALUES (?,?,?,?)').run(msg.author.id,boxType,prize.name,prize.value);
+      const profit = gained-box.price;
+      return msg.reply({embeds:[new EmbedBuilder().setTitle(`${box.emoji} فتحت صندوق ${boxType}!`).setColor(box.color)
+        .addFields({name:'🎁 الجائزة',value:prize.name,inline:true},{name:'💰 القيمة',value:prize.type==='money'?fmt(prize.value):`حماية ${prize.value}س`,inline:true})]});
+    }
+
+    // ==========================
+    // معلومات عامة
+    // ==========================
+    if (cmd==='متصدرون'||cmd==='ليدربورد') {
+      const top = db.prepare('SELECT *,(cash+bank) as total FROM users ORDER BY total DESC LIMIT 10').all();
+      const medals = ['🥇','🥈','🥉','4️⃣','5️⃣','6️⃣','7️⃣','8️⃣','9️⃣','🔟'];
+      return msg.reply({embeds:[new EmbedBuilder().setTitle('🏆 أثرى رجال الأعمال').setColor('#ffd700')
+        .setDescription(top.map((u,i)=>`${medals[i]} **${u.username}** — ${fmt(u.total)}`).join('\n')||'لا بيانات')]});
+    }
+    if (cmd==='الخزينة') {
+      const t = db.prepare('SELECT * FROM treasury WHERE id=1').get();
+      const cnt = db.prepare('SELECT COUNT(*) as c FROM users').get().c;
+      return msg.reply({embeds:[new EmbedBuilder().setTitle('🏛 الخزينة العامة').setColor('#e74c3c')
+        .addFields({name:'💰 الرصيد',value:fmt(t.amount),inline:true},{name:'👥 رجال الأعمال',value:`${cnt}`,inline:true})]});
+    }
+    if (cmd==='وقت') {
+      const tranLeft = Math.max(0,TRANSFER_COOLDOWN-(Date.now()-(user.last_transfer||0)));
+      const loanLeft = Math.max(0,24*60*60*1000-(Date.now()-(user.last_loan||0)));
+      const boxLeft = Math.max(0,3*60*60*1000-(Date.now()-(user.last_lootbox||0)));
+      const fields = [
+        {name:'💼 عمل',value:cooldownLeft(user,'عمل')>0?`⏰ ${fmtTime(cooldownLeft(user,'عمل'))}`:'✅ جاهز',inline:true},
+        {name:'💥 تخريب',value:cooldownLeft(user,'تخريب')>0?`⏰ ${fmtTime(cooldownLeft(user,'تخريب'))}`:'✅ جاهز',inline:true},
+        {name:'💸 تحويل',value:tranLeft>0?`⏰ ${fmtTime(tranLeft)}`:'✅ جاهز',inline:true},
+        {name:'🏦 قرض',value:loanLeft>0?`⏰ ${fmtTime(loanLeft)}`:'✅ جاهز',inline:true},
+        {name:'🎁 صندوق',value:boxLeft>0?`⏰ ${fmtTime(boxLeft)}`:'✅ جاهز',inline:true},
+      ];
+      return msg.reply({embeds:[new EmbedBuilder().setTitle(`⏰ أوقات الأوامر`).setColor('#3498db').addFields(...fields)]});
+    }
+
+    if (cmd==='اوامر'||cmd==='أوامر') {
+      return msg.reply({embeds:[new EmbedBuilder().setTitle('📋 أوامر إمبراطورية الأعمال').setColor('#4e8aff')
+        .addFields(
+          {name:'👤 الحساب',value:'`ملفي` `رصيد` `وقت` `ائتمان`'},
+          {name:'💼 المهنة',value:'`المهن` `مهنة [اسم]` `عمل`'},
+          {name:'🏦 البنك',value:'`إيداع` `سحب` `تحويل @شخص مبلغ` `قرض مبلغ` `سداد` `حماية 6/12/24/72`'},
+          {name:'🏢 الشركات',value:'`شركة` `شركاتي` `تحصيل_أرباح` `بيع_شركة [رقم]`'},
+          {name:'📦 الموارد والتصنيع',value:'`موارد` `سوق_موارد` `مخزوني` `تصنيع [اسم] [كمية]` `بيع_منتج [اسم] [كمية]`'},
+          {name:'📈 الأسهم',value:'`الأسهم` `شراء_سهم [رمز] [كمية]` `بيع_سهم [رمز] [كمية]` `محفظتي`'},
+          {name:'💥 التخريب والدعاوى',value:'`تخريب @شخص` `دعوى @شخص` `دعاواي`'},
+          {name:'🤝 التحالفات',value:'`تأسيس_تحالف [اسم]` `دعوة_تحالف @شخص` `تحالفي` `مغادرة_تحالف`'},
+          {name:'🗺️ الأسواق',value:'`أسواق` `سيطرة [رقم]` `تحالفات`'},
+          {name:'📝 العقود',value:'`عقد [مبلغ] [مجال]` `المجالات` `نتيجة_عقد` `عقدي`'},
+          {name:'🎁 المكافآت',value:'`صناديق` `فتح_صندوق [نوع]`'},
+          {name:'📊 عام',value:'`متصدرون` `الخزينة`'},
+        ).setFooter({text:'💡 كل | نص | ربع | 1k | 1m | 1b'})]});
+    }
+
+    // ==========================
+    // أوامر الإدارة
+    // ==========================
+    const isOwner = msg.author.id===CONFIG.OWNER_ID||CONFIG.EXTRA_OWNERS.includes(msg.author.id);
+    if (!isOwner) return;
+
+    if (cmd==='تفضل') {
+      const target = msg.mentions.users.first(), amount = parseAmount(args[1]);
+      if (!target||isNaN(amount)) return msg.reply('❌ `تفضل @شخص مبلغ`');
+      getUser(target.id,target.username); db.prepare('UPDATE users SET cash=cash+? WHERE id=?').run(amount,target.id);
+      return msg.reply(`✅ أضفت ${fmt(amount)}`);
+    }
+    if (cmd==='خذ') {
+      const target = msg.mentions.users.first(), amount = parseAmount(args[1]);
+      if (!target||isNaN(amount)) return msg.reply('❌ `خذ @شخص مبلغ`');
+      db.prepare('UPDATE users SET cash=MAX(0,cash-?) WHERE id=?').run(amount,target.id);
+      return msg.reply(`✅ أخذت ${fmt(amount)}`);
+    }
+    if (cmd==='ريست') {
+      const target = msg.mentions.users.first(); if (!target) return msg.reply('❌ `ريست @شخص`');
+      db.prepare('UPDATE users SET cash=5000,bank=0,loan=0,loan_due=0,credit_score=100 WHERE id=?').run(target.id);
+      db.prepare('DELETE FROM companies WHERE owner_id=?').run(target.id);
+      db.prepare('DELETE FROM resources WHERE owner_id=?').run(target.id);
+      db.prepare('DELETE FROM user_stocks WHERE owner_id=?').run(target.id);
+      return msg.reply(`✅ تم ريست ${target.username}`);
+    }
+    if (cmd==='ريست_الكل') {
+      if (args[0]!=='تأكيد') return msg.reply('⚠️ `ريست_الكل تأكيد`');
+      db.prepare('UPDATE users SET cash=5000,bank=0,loan=0,loan_due=0,credit_score=100,last_work=0,last_invest=0,last_sabotage=0,last_transfer=0,last_loan=0,last_lootbox=0,protection_until=0').run();
+      db.prepare('DELETE FROM companies').run(); db.prepare('DELETE FROM resources').run();
+      db.prepare('DELETE FROM user_stocks').run(); db.prepare('UPDATE treasury SET amount=0').run();
+      return msg.reply('✅ تم ريست الكل!');
+    }
+
+  } catch(e) { console.error('خطأ:',e); msg.reply('❌ حدث خطأ!').catch(()=>{}); }
+});
+
+client.on('interactionCreate', async (interaction) => {
+  if (!interaction.isButton()) return;
+  const customId = interaction.customId;
+
+  // زر شراء شركة
+  if (customId.startsWith('buy_co_')) {
+    const parts = customId.split('_'); // buy_co_c1_userId
+    const coId = parts[2], userId = parts[3];
+    if (interaction.user.id!==userId) return interaction.reply({content:'❌ ليست لك!',ephemeral:true});
+    const cDef = COMPANIES_LIST.find(c=>c.id===coId);
+    if (!cDef) return interaction.reply({content:'❌ غير موجودة',ephemeral:true});
+    const freshUser = getUser(userId,interaction.user.username);
+    if (freshUser.cash<cDef.price) return interaction.reply({content:`❌ تحتاج ${fmt(cDef.price)}`,ephemeral:true});
+    db.prepare('UPDATE users SET cash=cash-? WHERE id=?').run(cDef.price,userId);
+    db.prepare('INSERT INTO companies (owner_id,company_id,level,current_value,last_collected) VALUES (?,?,1,?,?)').run(userId,cDef.id,cDef.price,Date.now());
+    const updatedUser = getUser(userId);
+    const rows = [];
+    for (let page=0; page<2; page++) {
+      const row = new ActionRowBuilder();
+      COMPANIES_LIST.slice(page*5,page*5+5).forEach(c=>{
+        const canAfford = updatedUser.cash>=c.price;
+        row.addComponents(new ButtonBuilder().setCustomId(`buy_co_${c.id}_${userId}`).setLabel(`${c.name.replace(/[☕🏪🍕🏋️🏬⚙️🏢🏭🌐👑]/g,'').trim()} ${fmt(c.price)}`).setStyle(canAfford?ButtonStyle.Success:ButtonStyle.Secondary).setDisabled(!canAfford));
+      });
+      rows.push(row);
+    }
+    const myCosForUpgrade = db.prepare('SELECT * FROM companies WHERE owner_id=? AND level < 10').all(userId);
+    if (myCosForUpgrade.length>0) {
+      const upRow = new ActionRowBuilder();
+      myCosForUpgrade.slice(0,5).forEach(co=>{
+        const cd = COMPANIES_LIST.find(c=>c.id===co.company_id);
+        const req = COMPANY_UPGRADE_REQ[co.level-1];
+        const canUp = hasEnoughResources(userId, req);
+        upRow.addComponents(new ButtonBuilder().setCustomId(`upgrade_co_${co.id}_${userId}`).setLabel(`⬆️ ${cd?.name.replace(/[☕🏪🍕🏋️🏬⚙️🏢🏭🌐👑]/g,'').trim()} Lv${co.level}→${co.level+1}`).setStyle(canUp?ButtonStyle.Primary:ButtonStyle.Secondary).setDisabled(!canUp));
+      });
+      rows.push(upRow);
+    }
+    const embed = new EmbedBuilder().setTitle('🏢 سوق الشركات').setColor('#27ae60')
+      .setDescription(COMPANIES_LIST.map(c=>`${c.name} \`[${c.id}]\` — 💰 ${fmt(c.price)}`).join('\n'))
+      .setFooter({text:`رصيدك: ${fmt(updatedUser.cash)} | ✅ اشتريت ${cDef.name}!`});
+    return interaction.update({embeds:[embed], components:rows});
+  }
+
+  // زر ترقية شركة
+  if (customId.startsWith('upgrade_co_')) {
+    const parts = customId.split('_');
+    const coDbId = parseInt(parts[2]), userId = parts[3];
+    if (interaction.user.id!==userId) return interaction.reply({content:'❌ ليست لك!',ephemeral:true});
+    const co = db.prepare('SELECT * FROM companies WHERE id=? AND owner_id=?').get(coDbId,userId);
+    if (!co) return interaction.reply({content:'❌ غير موجودة',ephemeral:true});
+    if (co.level>=10) return interaction.reply({content:'🏆 أعلى مستوى!',ephemeral:true});
+    const req = COMPANY_UPGRADE_REQ[co.level-1];
+    const cDef = COMPANIES_LIST.find(c=>c.id===co.company_id);
+    if (!hasEnoughResources(userId, req)) return interaction.reply({content:'❌ مواد ناقصة!',ephemeral:true});
+    for (const [n,v] of Object.entries(req)) { if(v>0) removeResource(userId,n,v); }
+    const newLevel = co.level+1;
+    const newValue = Math.floor(cDef.price*(LEVEL_MULTIPLIERS[newLevel-1]||1));
+    db.prepare('UPDATE companies SET level=?,current_value=? WHERE id=?').run(newLevel,newValue,coDbId);
+    const updatedUser = getUser(userId);
+    const rows2 = [];
+    for (let pg=0; pg<2; pg++) {
+      const row = new ActionRowBuilder();
+      COMPANIES_LIST.slice(pg*5,pg*5+5).forEach(c=>{
+        const canAfford = updatedUser.cash>=c.price;
+        row.addComponents(new ButtonBuilder().setCustomId(`buy_co_${c.id}_${userId}`).setLabel(`${c.name.replace(/[☕🏪🍕🏋️🏬⚙️🏢🏭🌐👑]/g,'').trim()} ${fmt(c.price)}`).setStyle(canAfford?ButtonStyle.Success:ButtonStyle.Secondary).setDisabled(!canAfford));
+      });
+      rows2.push(row);
+    }
+    const myLeft = db.prepare('SELECT * FROM companies WHERE owner_id=? AND level < 10').all(userId);
+    if (myLeft.length>0) {
+      const upRow2 = new ActionRowBuilder();
+      myLeft.slice(0,5).forEach(l2=>{
+        const cd2 = COMPANIES_LIST.find(c=>c.id===l2.company_id);
+        const req2 = COMPANY_UPGRADE_REQ[l2.level-1];
+        const canUp = hasEnoughResources(userId, req2);
+        upRow2.addComponents(new ButtonBuilder().setCustomId(`upgrade_co_${l2.id}_${userId}`).setLabel(`⬆️ ${cd2?.name.replace(/[☕🏪🍕🏋️🏬⚙️🏢🏭🌐👑]/g,'').trim()} Lv${l2.level}→${l2.level+1}`).setStyle(canUp?ButtonStyle.Primary:ButtonStyle.Secondary).setDisabled(!canUp));
+      });
+      rows2.push(upRow2);
+    }
+    const embed2 = new EmbedBuilder().setTitle('🏢 سوق الشركات').setColor('#27ae60')
+      .setDescription(COMPANIES_LIST.map(c=>`${c.name} — 💰 ${fmt(c.price)}`).join('\n'))
+      .setFooter({text:`✅ رُقّيت ${cDef?.name} إلى مستوى ${newLevel}!`});
+    return interaction.update({embeds:[embed2], components:rows2});
+  }
+
+  // زر طلب كمية المورد
+  if (customId.startsWith('askres_')) {
+    const parts = customId.split('_');
+    const resName = parts[1], userId = parts[2];
+    if (interaction.user.id!==userId) return interaction.reply({content:'❌ ليست لك!',ephemeral:true});
+    await interaction.reply({content:`🛒 اكتب الكمية التي تريد شراءها من **${resName}**`, ephemeral:false});
+    const channel = interaction.channel;
+    try {
+      const collected = await channel.awaitMessages({ filter: m=>m.author.id===userId, max:1, time:30000, errors:['time'] });
+      const response = collected.first();
+      const qty = parseInt(response.content.trim());
+      if (isNaN(qty)||qty<=0) return response.reply('❌ كمية غير صحيحة!').catch(()=>{});
+      const info = RAW_RESOURCES[resName];
+      if (!info) return response.reply('❌ مورد غير موجود!').catch(()=>{});
+      const cost = info.price*qty;
+      const freshUser = getUser(userId,interaction.user.username);
+      if (freshUser.cash<cost) return response.reply(`❌ تحتاج **${fmt(cost)}**`).catch(()=>{});
+      db.prepare('UPDATE users SET cash=cash-? WHERE id=?').run(cost,userId);
+      addResource(userId, resName, qty);
+      await response.reply({embeds:[new EmbedBuilder().setTitle('✅ تم الشراء!').setColor('#e67e22')
+        .addFields({name:'المورد',value:resName,inline:true},{name:'الكمية',value:`${qty}`,inline:true},{name:'التكلفة',value:fmt(cost),inline:true})]}).catch(()=>{});
+    } catch(e) {
+      interaction.followUp({content:'⏰ انتهى الوقت!',ephemeral:true}).catch(()=>{});
+    }
+    return;
+  }
+});
+
+// دخل الأسواق التلقائي للتحالفات (كل ساعة)
+function startPassiveIncomeSystem() {
+  setInterval(() => {
+    try {
+      const controlled = db.prepare('SELECT * FROM markets WHERE controlled_by IS NOT NULL').all();
+      for (const m of controlled) {
+        db.prepare('UPDATE alliances SET treasury=treasury+? WHERE id=?').run(m.income_per_hour, m.controlled_by);
+      }
+    } catch(e) { console.error('خطأ دخل الأسواق:', e); }
+  }, 60*60*1000);
 }
 
-// ══════════════════════════════════════════════════════
-//  🔍  بحث في التريدات والطلبات
-// ══════════════════════════════════════════════════════
-async function handleSearch(message) {
-  const query = message.content.slice(1).trim().split(/ +/).slice(1).join(' ').toLowerCase();
-
-  if (!query || query.length < 2) {
-    return message.channel.send({ embeds: [
-      new EmbedBuilder().setColor('#FFA500')
-        .setTitle('🔍 بحث في التريدات')
-        .setDescription('اكتب اسم الشي اللي تبيه:\n`!بحث tralalero`')
-        .setTimestamp()
-    ]});
-  }
-
-  const matchedTrades   = [...activeTrades.entries()].filter(([, t]) =>
-    !t.locked && (
-      t.offerItem.toLowerCase().includes(query) ||
-      t.wantItem.toLowerCase().includes(query)
-    )
-  );
-  const matchedRequests = [...activeRequests.entries()].filter(([, r]) =>
-    !r.locked && (
-      r.wantItem.toLowerCase().includes(query) ||
-      r.offerItem.toLowerCase().includes(query)
-    )
-  );
-
-  if (matchedTrades.length === 0 && matchedRequests.length === 0) {
-    return message.channel.send({ embeds: [
-      new EmbedBuilder().setColor('#FFA500')
-        .setTitle(`🔍 نتائج البحث عن: "${query}"`)
-        .setDescription('❌ ما في نتائج — جرب كلمة ثانية')
-        .setTimestamp()
-    ]});
-  }
-
-  const embed = new EmbedBuilder()
-    .setColor('#5865F2')
-    .setTitle(`🔍 نتائج البحث عن: "${query}"`)
-    .setDescription(`وجدت **${matchedTrades.length}** تريد و **${matchedRequests.length}** طلب`)
-    .setTimestamp();
-
-  let count = 0;
-  for (const [, t] of matchedTrades) {
-    if (count++ >= 5) break;
-    const rep = reputationField(t.userId);
-    embed.addFields({
-      name: `🔄 ${t.offerItem} → يبي: ${t.wantItem}`,
-      value: `👤 <@${t.userId}>
-💵 ${t.income}/sec | ⬆️ ${t.upgrades}
-⭐ السمعة: ${rep}`,
-      inline: false
-    });
-  }
-  for (const [, r] of matchedRequests) {
-    if (count++ >= 10) break;
-    const rep = reputationField(r.userId);
-    embed.addFields({
-      name: `🛒 يطلب: ${r.wantItem} | مقابل: ${r.offerItem}`,
-      value: `👤 <@${r.userId}>
-💵 ${r.offerIncome}/sec
-⭐ السمعة: ${rep}`,
-      inline: false
-    });
-  }
-
-  await message.channel.send({ embeds: [embed] });
+// تذبذب طبيعي بسيط لأسعار الأسهم (كل 10 دقائق)
+function startStockDriftSystem() {
+  setInterval(() => {
+    try {
+      const stocks = db.prepare('SELECT * FROM stocks').all();
+      for (const s of stocks) {
+        const drift = 1 + (Math.random()*0.1 - 0.05); // ±5%
+        const newPrice = Math.max(50, Math.floor(s.price*drift));
+        db.prepare('UPDATE stocks SET price=? WHERE symbol=?').run(newPrice, s.symbol);
+      }
+    } catch(e) { console.error('خطأ تذبذب الأسهم:', e); }
+  }, 10*60*1000);
 }
 
-// ══════════════════════════════════════════════════════
-client.login(TOKEN);
+client.login(process.env.TOKEN);
